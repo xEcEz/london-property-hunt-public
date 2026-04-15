@@ -4,6 +4,14 @@ An AI-powered workflow that searches London rental platforms twice a day, tracks
 
 ---
 
+## Example output
+
+Every run sends you an email like this — clickable listings, ready-to-send outreach messages, and a backlog of uncontacted leads:
+
+![Email summary preview](docs/email-preview.png)
+
+---
+
 ## What it does
 
 1. **Searches 4 platforms** — SpareRoom, OpenRent, Rightmove, Zoopla — across your target areas

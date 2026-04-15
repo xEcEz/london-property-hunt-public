@@ -1,4 +1,4 @@
-# London Property Hunt — Automated with Claude Code
+# London Property Hunt — Automated with Claude Cowork
 
 An AI-powered workflow that searches London rental platforms twice a day, tracks listings in a spreadsheet, generates personalised outreach messages, and emails you a formatted summary — fully automatically.
 

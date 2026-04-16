@@ -60,7 +60,7 @@ Modifiers:
 - Area in [FLAT_PRIMARY_AREAS]: +1
 - Area in [FLAT_SECONDARY_AREAS]: −1
 - Unfurnished or part-furnished: +0.5
-- Rent in stretch band £[FLAT_BUDGET_SWEET_MAX + 1] – £[FLAT_BUDGET_HARD_CAP]: −[FLAT_STRETCH_PENALTY]
+- Rent above £[FLAT_BUDGET_SWEET_MAX] and up to £[FLAT_BUDGET_HARD_CAP]: −[FLAT_STRETCH_PENALTY]
 
 Tiers:
 - HIGH: score ≥ [FLAT_TIER_HIGH_THRESHOLD]

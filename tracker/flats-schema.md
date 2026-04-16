@@ -1,6 +1,6 @@
 # Flats Tracker — Schema (Google Sheet)
 
-The flats variant of the skill reads and writes a Google Sheet (not an xlsx file). This lets the local laptop cron and the remote Anthropic-hosted fallback trigger share state.
+The flats variant of the skill uses a Google Sheet (via Drive MCP) to share state between the local laptop cron and the remote Anthropic-hosted fallback trigger.
 
 ## File location
 
@@ -82,5 +82,13 @@ One-time workbook creation is automated via a small Python script (Google Sheets
 4. Fill `Meta!A1:B4` per the cell map above (leave `B2` and `B3` empty initially)
 5. Freeze row 1 on `Flats`; enable filter on row 1
 6. Copy the Sheet ID from the URL into `config.md` as `FLAT_TRACKER_SHEET_ID`
+
+### Headers copy-paste block
+
+Paste this single tab-separated line into cell `A1` of the `Flats` tab to populate all 23 headers at once (Google Sheets auto-splits on tabs):
+
+```
+URL	Platform	Found On	Title	Area	Price	Beds	Size	Size Source	Furnished	Available From	Floor	Bathtub	New/Renovated	Calm	Light	Wooden Floor	Score	Tier	Status	Reason	Needs-verify	Notes
+```
 
 The skill creates missing tabs and headers on first run if the workbook is empty, but starting from the correct structure avoids first-run friction.

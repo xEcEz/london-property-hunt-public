@@ -42,11 +42,13 @@ Runs on a cron schedule (e.g. 9 AM and 6 PM daily). Human effort required: zero 
 ```
 london-property-hunt/
 ├── README.md              ← you are here
-├── skill.md               ← the main Claude Code skill (copy-paste into your setup)
+├── skill.md               ← rooms variant — shared-room hunt (default)
+├── skill-flats.md         ← flats variant — 1–2 bed whole-unit hunt
 ├── config.example.md      ← fill in your personal config here
 ├── case-study.md          ← write-up of how this workflow was built and what it produced
 ├── tracker/
-│   └── README.md          ← spreadsheet column schema and setup instructions
+│   ├── README.md          ← rooms tracker (xlsx) column schema
+│   └── flats-schema.md    ← flats tracker (Google Sheet) column schema
 ├── outreach/              ← generated outreach .txt files land here (gitignored)
 └── .gitignore
 ```

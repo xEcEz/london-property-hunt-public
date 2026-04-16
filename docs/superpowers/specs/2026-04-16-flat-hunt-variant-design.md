@@ -103,7 +103,7 @@ Score is on a 0–11 scale, summed from signal weights and modifiers.
 | Primary area (§7) | +1 |
 | Secondary area (§7) | −1 |
 | Unfurnished or part-furnished | +0.5 |
-| Rent in stretch band £3,001–£3,500 | **−1** |
+| Rent in stretch band £3,201–£3,500 | **−1** |
 
 ### Tiers
 

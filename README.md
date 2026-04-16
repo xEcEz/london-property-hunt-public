@@ -12,6 +12,19 @@ Every run sends you an email like this — clickable listings, ready-to-send out
 
 ---
 
+## Variants
+
+This repo ships **two** skill variants. Pick one via `HUNT_MODE` in your `config.md`.
+
+| Variant | Skill file | Tracker | Who should use it |
+|---|---|---|---|
+| **Rooms** (default) | [`skill.md`](skill.md) | Local xlsx (`openpyxl`) | Renting a room in a shared 2–3 bed flat; SpareRoom-heavy |
+| **Flats** | [`skill-flats.md`](skill-flats.md) | Google Sheet (Drive MCP) | Renting a whole 1–2 bed flat; scoring on top-floor / new-build / calm / bathtub / light / wooden floor |
+
+The two variants are independent — they share the same `config.example.md` template and outreach folder convention, nothing else.
+
+---
+
 ## What it does
 
 1. **Searches 4 platforms** — SpareRoom, OpenRent, Rightmove, Zoopla — across your target areas
@@ -82,11 +95,36 @@ claude "Run the London property hunt — search all platforms, update tracker, s
 
 ### 4. Schedule it
 
-In Claude Code, use `/schedule` to run it twice a day:
+**Rooms variant** (local xlsx, any single schedule works):
 
 ```
 /schedule 0 9,18 * * * Run the London property hunt skill
 ```
+
+**Flats variant** (local cron + remote fallback — recommended so missed days are self-healing):
+
+1. **Local cron** (10:00 London time, uses Claude-in-Chrome for full fidelity):
+
+   ```bash
+   crontab -e
+   # add:
+   0 10 * * * cd ~/hunt && /usr/local/bin/claude "Run the London flat hunt skill" >> ~/hunt/cron.log 2>&1
+   ```
+
+2. **Remote fallback trigger** (15:00 London time, no-ops if local already ran):
+
+   In Claude Code:
+   ```
+   /schedule 0 15 * * * Run the London flat hunt skill (remote fallback mode)
+   ```
+
+   The skill reads `Meta!B2` on the tracker sheet and exits silently if the local run already stamped today.
+
+3. **Weekly health check** (optional; Mondays 09:00):
+
+   ```
+   /schedule 0 9 * * 1 Check Meta!B2 and Meta!B3 on the flat hunt sheet; if either is more than 2 days stale, send a one-line status email.
+   ```
 
 ---
 

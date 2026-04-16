@@ -5,6 +5,20 @@
 
 ---
 
+## Mode
+
+```
+HUNT_MODE=rooms
+```
+
+`HUNT_MODE` selects which skill variant runs:
+- `rooms` — shared-room hunt (uses `skill.md`, xlsx tracker)
+- `flats` — whole-unit 1–2 bed hunt (uses `skill-flats.md`, Google Sheet tracker)
+
+All fields below that begin with `FLAT_*` or are under a `## Flats mode` section are ignored in `rooms` mode, and vice versa.
+
+---
+
 ## About you
 
 ```
@@ -113,3 +127,61 @@ SPAREROOM_STUDIO_URLS=
 
 - You can update this file any time — just re-run the skill and it picks up changes
 - If you find a place and want to stop the scheduled runs, delete the schedule: `/schedule list` then `/schedule delete [id]`
+
+---
+
+## Flats mode (only used if `HUNT_MODE=flats`)
+
+### Unit criteria
+
+```
+FLAT_BEDROOMS_MIN=1
+FLAT_BEDROOMS_MAX=2
+FLAT_SIZE_FLOOR_M2=60
+FLAT_FURNISHED_PREFERENCE=unfurnished   # unfurnished | furnished | any
+```
+
+### Budget
+
+```
+FLAT_BUDGET_SWEET_MAX=3200
+FLAT_BUDGET_HARD_CAP=3500
+FLAT_STRETCH_PENALTY=1
+```
+
+### Areas (ordered by priority)
+
+```
+FLAT_PRIMARY_AREAS=Islington, Angel, Camden Town, Kentish Town, De Beauvoir Town, Highbury, Canonbury, Clerkenwell
+FLAT_SECONDARY_AREAS=Tufnell Park, Holloway, Bloomsbury, Russell Square, Barbican, Finsbury Park, London Bridge, Bermondsey
+```
+
+### Scoring weights (overrides — defaults in skill-flats.md)
+
+```
+FLAT_WEIGHT_TOP_FLOOR=3
+FLAT_WEIGHT_NEW_BUILD=3
+FLAT_WEIGHT_CALM=2
+FLAT_WEIGHT_BATHTUB=1
+FLAT_WEIGHT_LIGHT=1
+FLAT_WEIGHT_WOODEN_FLOOR=1
+FLAT_TIER_HIGH_THRESHOLD=7
+FLAT_TIER_MEDIUM_THRESHOLD=4
+```
+
+### Tracker (Google Sheet)
+
+```
+FLAT_TRACKER_SHEET_ID=1aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789AbCdEf
+FLAT_TRACKER_FLATS_TAB=Flats
+FLAT_TRACKER_META_TAB=Meta
+```
+
+Create a Google Sheet titled "London Flat Hunt" in the Drive account authenticated with Drive MCP. Paste its ID (from the URL, between `/d/` and `/edit`) above.
+
+### Outreach
+
+```
+FLAT_OUTREACH_STYLE=agent   # agent | landlord
+FLAT_OUTREACH_AVAILABILITY=weekday evenings and weekends
+```

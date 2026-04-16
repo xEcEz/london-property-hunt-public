@@ -92,8 +92,9 @@ YOUR_HUNT_DIR=~/my-room-hunt
 ```
 
 The skill will:
-- Read/write `$YOUR_HUNT_DIR/london_room_hunt.xlsx`
-- Save outreach files to `$YOUR_HUNT_DIR/outreach/`
+- **Rooms variant:** read/write `$YOUR_HUNT_DIR/london_room_hunt.xlsx`
+- **Flats variant:** read/write the Google Sheet at `FLAT_TRACKER_SHEET_ID` (tracker is not local)
+- Save outreach files to `$YOUR_HUNT_DIR/outreach/` (both variants)
 
 Make sure the directory exists before running:
 ```bash

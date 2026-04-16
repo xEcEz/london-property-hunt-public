@@ -19,7 +19,7 @@ This repo ships **two** skill variants. Pick one via `HUNT_MODE` in your `config
 | Variant | Skill file | Tracker | Who should use it |
 |---|---|---|---|
 | **Rooms** (default) | [`skill.md`](skill.md) | Local xlsx (`openpyxl`) | Renting a room in a shared 2–3 bed flat; SpareRoom-heavy |
-| **Flats** | [`skill-flats.md`](skill-flats.md) | Google Sheet (Drive MCP) | Renting a whole 1–2 bed flat; scoring on top-floor / new-build / calm / bathtub / light / wooden floor |
+| **Flats** | [`skill-flats.md`](skill-flats.md) | [Google Sheet](tracker/flats-schema.md) (Drive MCP) | Renting a whole 1–2 bed flat; scoring on top-floor / new-build / calm / bathtub / light / wooden floor |
 
 The two variants are independent — they share the same `config.example.md` template and outreach folder convention, nothing else.
 
@@ -60,8 +60,9 @@ london-property-hunt/
 - **Claude Code** (CLI or desktop app) — [claude.ai/code](https://claude.ai/code)
 - **Claude in Chrome** MCP extension — for browser automation (SpareRoom, OpenRent, etc.)
 - **Gmail MCP connector** — for draft creation and sending
-- **Python 3 + openpyxl** — for spreadsheet updates (`pip install openpyxl`)
-- A Gmail account you can grant MCP access to
+- **Google Drive MCP connector** — *flats variant only* — for the Google Sheet tracker
+- **Python 3 + openpyxl** — *rooms variant only* — for xlsx spreadsheet updates (`pip install openpyxl`)
+- A Gmail / Google account you can grant MCP access to
 
 ---
 
@@ -77,7 +78,9 @@ cp config.example.md config.md
 
 Edit `config.md` — fill in your name, target areas, budget, move-in date, and email.
 
-### 2. Create your tracker spreadsheet
+### 2. Create your tracker
+
+**Rooms variant** (local xlsx):
 
 ```bash
 mkdir -p ~/London-Room-Hunt/outreach
@@ -85,9 +88,22 @@ mkdir -p ~/London-Room-Hunt/outreach
 
 On first run the skill creates the spreadsheet automatically at the path in your config. Or create it manually — see [tracker/README.md](tracker/README.md) for the column schema.
 
+**Flats variant** (Google Sheet):
+
+```bash
+mkdir -p ~/hunt/outreach
+```
+
+Create a Google Sheet titled `London Flat Hunt`, add `Flats` and `Meta` tabs, and paste the tab-separated headers provided in [tracker/flats-schema.md](tracker/flats-schema.md). Put the Sheet ID into `FLAT_TRACKER_SHEET_ID` in your `config.md`.
+
 ### 3. Install the skill in Claude Code
 
-Copy the contents of `skill.md` and paste it as a new skill in Claude Code, or point your Claude Code config at this file.
+Pick the skill file that matches your `HUNT_MODE`:
+
+- `HUNT_MODE=rooms` → copy the contents of [`skill.md`](skill.md)
+- `HUNT_MODE=flats` → copy the contents of [`skill-flats.md`](skill-flats.md)
+
+Paste it as a new skill in Claude Code, or point your Claude Code config at the file.
 
 Alternatively, run it manually:
 

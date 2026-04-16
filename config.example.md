@@ -24,7 +24,9 @@ All fields below that begin with `FLAT_*` or are under a `## Flats mode` section
 ```
 YOUR_NAME=Alex
 YOUR_AGE=29
+YOUR_NATIONALITY=British
 YOUR_PROFESSION=Software Engineer
+YOUR_EMPLOYER_TYPE=a fintech startup
 YOUR_PROFILE_DESCRIPTION=easy-going, clean, tidy, cooks, gym, hybrid WFH 2 days/week, no parties, professional
 YOUR_PROFILE_SUMMARY=Clean, tidy, reliable — hybrid WFH, permanent contract
 ```

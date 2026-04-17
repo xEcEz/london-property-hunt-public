@@ -80,28 +80,26 @@ Search all four. URLs assembled from config areas + budget. Max price = £[FLAT_
 
 ## TRACKER
 
-Google Sheet ID: [FLAT_TRACKER_SHEET_ID]
-- Flats tab: [FLAT_TRACKER_FLATS_TAB] (default: `Flats`)
-- Meta tab: [FLAT_TRACKER_META_TAB] (default: `Meta`)
+Notion workspace with two databases under parent page [FLAT_TRACKER_NOTION_PARENT_PAGE_ID]:
 
-Columns (see tracker/flats-schema.md): URL, Platform, Found On, Title, Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status, Reason, Needs-verify, Notes.
+- **Flats database** — data source id [FLAT_TRACKER_FLATS_DATA_SOURCE_ID]. One page per listing.
+- **Meta database** — data source id [FLAT_TRACKER_META_DATA_SOURCE_ID]. Key/Value rows for `last_local_run`, `last_remote_run`, `schema_version`.
 
-Dedup: skip if URL already in column 1.
-New rows: Status = NEW 🔴, Found On = today (YYYY-MM-DD).
+Properties on Flats (see tracker/flats-schema.md for full types): Title (title), URL, Platform, Found On, Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status, Reason, Needs-verify, Notes.
 
-Row colours based on Tier:
-- HIGH: #E2EFDA
-- MEDIUM: #FFFFC7
-- LOW: #FCE4D6
+Dedup: before inserting, query the Flats data source filtered on `URL == <candidate URL>`. Skip if any match.
+New rows: Status = `NEW`, Found On = today (YYYY-MM-DD, Europe/Zurich). Use `notion-create-pages` with `parent.type = "data_source_id"`.
+
+Colour coding is automatic — the Tier select property has green/yellow/red options for HIGH/MEDIUM/LOW.
 
 ## REMOTE FALLBACK LOGIC (WebFetch mode only)
 
 Before doing anything else in WebFetch mode:
-1. Read Meta!B2 (`last_local_run`).
-2. If equal to today's YYYY-MM-DD → exit silently. Do not email. Do not scrape.
-3. Else → proceed with full search. On success, write today's YYYY-MM-DD to Meta!B3 (`last_remote_run`).
+1. Query the Meta data source for `Key == "last_local_run"`. Read its Value.
+2. If Value equals today's YYYY-MM-DD (Europe/Zurich) → exit silently. Do not email. Do not scrape. Do not update Meta.
+3. Else → proceed with full search. On success, find the `last_remote_run` row in Meta and call `notion-update-page` to set its Value to today's YYYY-MM-DD.
 
-In local mode (Claude-in-Chrome available): on success, write today's YYYY-MM-DD to Meta!B2 (`last_local_run`).
+In local mode (Claude-in-Chrome available): on success, update the `last_local_run` row's Value to today's YYYY-MM-DD the same way.
 
 ## EMAIL — SELF-CONTAINED, PHONE-READY
 
@@ -128,9 +126,11 @@ HTML body sections:
 
 **F — Stats:** Totals, area breakdown, days-to-[MOVE_IN_DATE], next run time. End: "⚠️ X days to [MOVE_IN_DATE]. Message at least 3 listings today."
 
-Always send, even on zero new listings — confirms pipeline ran.
+Always create a draft, even on zero new listings — confirms pipeline ran.
 
-After creating draft: navigate to https://mail.google.com/mail/u/[GMAIL_ACCOUNT_INDEX]/#drafts, open the latest draft, click Send. (In remote WebFetch mode, use `gmail_send_message` directly if available; skip the browser navigation.)
+**Local mode:** after creating the draft, navigate via Claude-in-Chrome to `https://mail.google.com/mail/u/[GMAIL_ACCOUNT_INDEX]/#drafts`, open the latest draft, click Send.
+
+**Remote mode:** the Gmail MCP in the remote environment is draft-only (no `gmail_send_message`). Leave the email as a draft — Raphael opens `https://mail.google.com/mail/u/0/#drafts` and clicks Send manually. Do NOT attempt to send via a second mechanism.
 
 ## OUTREACH
 
@@ -154,12 +154,13 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 
 ## SUCCESS CRITERIA
 
-- Flats tab updated, Meta tab stamped (B2 for local, B3 for remote)
+- Flats database has new pages for every listing that passed hard filters (one page per unique URL)
+- Meta database: `last_local_run` stamped on local runs; `last_remote_run` stamped on remote runs
 - No listings added that violate hard filters
-- No duplicates created (URL dedup works)
+- No duplicates created (URL dedup via Meta query works)
 - HIGH tier caps respected for size-unknown 1-beds
-- Outreach .txt files saved for HIGH priority
-- Email sent (always, even if zero new)
+- Outreach .txt files saved for HIGH priority (local mode only — remote mode skips file writes and inlines outreach in the email)
+- Email draft created (local mode also clicks Send; remote mode leaves as draft for manual review + send)
 ```
 
 ---
@@ -175,7 +176,9 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 | `[YOUR_EMPLOYER_TYPE]` | an AI/gaming startup | config.md |
 | `[MOVE_IN_DATE]` | early June 2026 | config.md |
 | `[FLAT_*]` | see config.example.md flats mode section | config.md |
-| `[FLAT_TRACKER_SHEET_ID]` | Google Sheet URL ID | config.md |
+| `[FLAT_TRACKER_NOTION_PARENT_PAGE_ID]` | Notion page ID (32 hex, no dashes or with dashes) of the parent "London Flat Hunt" page | config.md |
+| `[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]` | Notion data source ID for the Flats database | config.md |
+| `[FLAT_TRACKER_META_DATA_SOURCE_ID]` | Notion data source ID for the Meta database | config.md |
 | `[REGION_CODE]` | Rightmove region identifier for London (`REGION%5E87490`) or tighter (per area); leave as-is if unsure | hardcode in skill |
 | `[AREA_SLUG]` | zoopla/spareroom URL slug for area (lowercase, underscores) | derived from FLAT_PRIMARY_AREAS |
 | `[AREAS_CSV]` | comma-separated areas for OpenRent's `term=` | derived from FLAT_PRIMARY_AREAS |

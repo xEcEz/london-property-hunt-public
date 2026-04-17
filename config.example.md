@@ -93,8 +93,8 @@ YOUR_HUNT_DIR=~/my-room-hunt
 
 The skill will:
 - **Rooms variant:** read/write `$YOUR_HUNT_DIR/london_room_hunt.xlsx`
-- **Flats variant:** read/write the Google Sheet at `FLAT_TRACKER_SHEET_ID` (tracker is not local)
-- Save outreach files to `$YOUR_HUNT_DIR/outreach/` (both variants)
+- **Flats variant:** read/write the Notion databases referenced by `FLAT_TRACKER_*_DATA_SOURCE_ID` (tracker is not local)
+- Save outreach files to `$YOUR_HUNT_DIR/outreach/` (both variants, local mode only)
 
 Make sure the directory exists before running:
 ```bash
@@ -172,15 +172,17 @@ FLAT_TIER_HIGH_THRESHOLD=7
 FLAT_TIER_MEDIUM_THRESHOLD=4
 ```
 
-### Tracker (Google Sheet)
+### Tracker (Notion)
 
 ```
-FLAT_TRACKER_SHEET_ID=1aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789AbCdEf
-FLAT_TRACKER_FLATS_TAB=Flats
-FLAT_TRACKER_META_TAB=Meta
+FLAT_TRACKER_NOTION_PARENT_PAGE_ID=00000000000000000000000000000000
+FLAT_TRACKER_FLATS_DATA_SOURCE_ID=00000000-0000-0000-0000-000000000000
+FLAT_TRACKER_META_DATA_SOURCE_ID=00000000-0000-0000-0000-000000000000
 ```
 
-Create a Google Sheet titled "London Flat Hunt" in the Drive account authenticated with Drive MCP. Paste its ID (from the URL, between `/d/` and `/edit`) above.
+Create a Notion page titled "London Flat Hunt" (private-scope), then under it create two databases named `Flats` and `Meta` per `tracker/flats-schema.md`. Paste the parent page ID and each database's data source ID above.
+
+A one-shot setup script is available in `tracker/flats-schema.md` that shows the exact DDL / Notion MCP calls to create both databases with the right schemas and the three Meta rows (`last_local_run`, `last_remote_run`, `schema_version=1`).
 
 ### Outreach
 

@@ -19,7 +19,7 @@ This repo ships **two** skill variants. Pick one via `HUNT_MODE` in your `config
 | Variant | Skill file | Tracker | Who should use it |
 |---|---|---|---|
 | **Rooms** (default) | [`skill.md`](skill.md) | Local xlsx (`openpyxl`) | Renting a room in a shared 2–3 bed flat; SpareRoom-heavy |
-| **Flats** | [`skill-flats.md`](skill-flats.md) | [Google Sheet](tracker/flats-schema.md) (Drive MCP) | Renting a whole 1–2 bed flat; scoring on top-floor / new-build / calm / bathtub / light / wooden floor |
+| **Flats** | [`skill-flats.md`](skill-flats.md) | [Notion](tracker/flats-schema.md) (Notion MCP) | Renting a whole 1–2 bed flat; scoring on top-floor / new-build / calm / bathtub / light / wooden floor |
 
 The two variants are independent — they share the same `config.example.md` template and outreach folder convention, nothing else.
 
@@ -60,7 +60,7 @@ london-property-hunt/
 - **Claude Code** (CLI or desktop app) — [claude.ai/code](https://claude.ai/code)
 - **Claude in Chrome** MCP extension — for browser automation (SpareRoom, OpenRent, etc.)
 - **Gmail MCP connector** — for draft creation and sending
-- **Google Drive MCP connector** — *flats variant only* — for the Google Sheet tracker
+- **Notion MCP connector** — *flats variant only* — for the Notion-based tracker (full CRUD)
 - **Python 3 + openpyxl** — *rooms variant only* — for xlsx spreadsheet updates (`pip install openpyxl`)
 - A Gmail / Google account you can grant MCP access to
 
@@ -88,13 +88,13 @@ mkdir -p ~/London-Room-Hunt/outreach
 
 On first run the skill creates the spreadsheet automatically at the path in your config. Or create it manually — see [tracker/README.md](tracker/README.md) for the column schema.
 
-**Flats variant** (Google Sheet):
+**Flats variant** (Notion):
 
 ```bash
 mkdir -p ~/hunt/outreach
 ```
 
-Create a Google Sheet titled `London Flat Hunt`, add `Flats` and `Meta` tabs, and paste the tab-separated headers provided in [tracker/flats-schema.md](tracker/flats-schema.md). Put the Sheet ID into `FLAT_TRACKER_SHEET_ID` in your `config.md`.
+Create the Notion tracker via the one-shot setup snippet in [tracker/flats-schema.md](tracker/flats-schema.md) — it creates a parent page, both databases (Flats + Meta), and the three Meta rows. Paste the three resulting IDs into `FLAT_TRACKER_*` in your `config.md`.
 
 ### 3. Install the skill in Claude Code
 
@@ -136,12 +136,12 @@ claude "Run the London property hunt — search all platforms, update tracker, s
    /schedule 0 15 * * * Run the London flat hunt skill (remote fallback mode)
    ```
 
-   The skill reads `Meta!B2` on the tracker sheet and exits silently if the local run already stamped today.
+   The skill reads the `last_local_run` row in the Meta database and exits silently if the local run already stamped today.
 
 3. **Weekly health check** (optional; Mondays 09:00):
 
    ```
-   /schedule 0 9 * * 1 Check Meta!B2 and Meta!B3 on the flat hunt sheet; if either is more than 2 days stale, send a one-line status email.
+   /schedule 0 9 * * 1 Check last_local_run and last_remote_run rows in the Meta database; if either is more than 2 days stale, send a one-line status email.
    ```
 
 ---

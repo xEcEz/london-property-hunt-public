@@ -1,94 +1,145 @@
-# Flats Tracker — Schema (Google Sheet)
+# Flats Tracker — Schema (Notion)
 
-The flats variant of the skill uses a Google Sheet (via Drive MCP) to share state between the local laptop cron and the remote Anthropic-hosted fallback trigger.
+The flats variant uses two Notion databases under a parent page, accessed via the Notion MCP connector. This replaces the Google-Sheet-based tracker the project originally shipped with — the Drive MCP turned out to be read/create-only (no cell writes), and Notion MCP has full CRUD.
 
-## File location
+## Location
 
-Stored in the Google Drive account authenticated with the Drive MCP. Sheet ID is set in `config.md` as `FLAT_TRACKER_SHEET_ID`.
+Any Notion workspace the user authenticates with the Notion MCP. The connector can be scoped page-level, so granting access to a single private "London Flat Hunt" page is enough.
 
-## Tabs
+## Databases
 
-1. `Flats` — one row per listing
-2. `Meta` — run stamps and skill metadata
+1. **Flats** — one page per listing
+2. **Meta** — run stamps and skill metadata
+
+Both sit under a parent page called `London Flat Hunt`.
 
 ---
 
-## `Flats` tab
+## `Flats` database
 
-| # | Column | Type | Notes |
-|---|---|---|---|
-| 1 | URL | text | Dedup key (hyperlink) |
-| 2 | Platform | enum | Rightmove / Zoopla / OpenRent / SpareRoom |
-| 3 | Found On | date | First-seen date |
-| 4 | Title | text | Listing title |
-| 5 | Area | text | Must match a value in `FLAT_PRIMARY_AREAS` or `FLAT_SECONDARY_AREAS` |
-| 6 | Price | int | £ pcm |
-| 7 | Beds | int | 1 or 2 |
-| 8 | Size | number | m² (may be empty if size unknown) |
-| 9 | Size Source | enum | stated-text / floorplan / inferred-2bed / inferred-1bed-photos / unknown |
-| 10 | Furnished | enum | Furnished / Part / Unfurnished / Unknown |
-| 11 | Available From | date | Stated availability |
-| 12 | Floor | enum | Top / Mid / Ground / Unknown |
-| 13 | Bathtub | enum | Yes / No / Unknown |
-| 14 | New/Renovated | enum | Yes / No / Unknown |
-| 15 | Calm | enum | Yes / No / Unknown |
-| 16 | Light | enum | Good / Avg / Poor / Unknown |
-| 17 | Wooden Floor | enum | Yes / No / Unknown |
-| 18 | Score | number | 0–11, one decimal |
-| 19 | Tier | enum | HIGH / MEDIUM / LOW |
-| 20 | Status | enum | NEW 🔴 / CONTACTED / VIEWING / REJECTED / GONE |
-| 21 | Reason | text | One-line scoring summary |
-| 22 | Needs-verify | text | Comma-separated list of unresolved signals |
-| 23 | Notes | text | Free-form |
+| Property | Type | Notes |
+|---|---|---|
+| Title | title | Listing title |
+| URL | url | Dedup key — query this property before insert |
+| Platform | select | Rightmove / Zoopla / OpenRent / SpareRoom |
+| Found On | date | First-seen date |
+| Area | select | Must match one of the 16 area values (primary + secondary) |
+| Price | number | £ pcm |
+| Beds | number | 1 or 2 |
+| Size | number | m² (may be empty if unknown) |
+| Size Source | select | stated-text / floorplan / inferred-2bed / inferred-1bed-photos / unknown |
+| Furnished | select | Furnished / Part / Unfurnished / Unknown |
+| Available From | date | Stated availability |
+| Floor | select | Top / Mid / Ground / Unknown |
+| Bathtub | select | Yes / No / Unknown |
+| New/Renovated | select | Yes / No / Unknown |
+| Calm | select | Yes / No / Unknown |
+| Light | select | Good / Avg / Poor / Unknown |
+| Wooden Floor | select | Yes / No / Unknown |
+| Score | number | 0–11, one decimal |
+| Tier | select | HIGH (green) / MEDIUM (yellow) / LOW (red) |
+| Status | select | NEW / CONTACTED / VIEWING / REJECTED / GONE |
+| Reason | rich_text | One-line scoring summary |
+| Needs-verify | rich_text | Comma-separated list of unresolved signals |
+| Notes | rich_text | Free-form |
 
-### Row colours (tier-based)
-
-| Tier | Fill hex |
-|---|---|
-| HIGH | `#E2EFDA` (green) |
-| MEDIUM | `#FFFFC7` (yellow) |
-| LOW | `#FCE4D6` (red) |
+23 properties total. Tier select colours render HIGH/MEDIUM/LOW rows green/yellow/red automatically.
 
 ### Deduplication
 
-Skill loads all values from column 1 (`URL`) into a set at the start of each run. New rows with duplicate URLs are silently dropped — every run is idempotent.
+Before inserting a new listing, query the Flats data source with a filter on `URL == <candidate URL>`. If any row returns, skip the insert.
 
 ---
 
-## `Meta` tab
+## `Meta` database
 
-| Cell | Purpose |
+| Property | Type | Notes |
+|---|---|---|
+| Key | title | `last_local_run` / `last_remote_run` / `schema_version` |
+| Value | rich_text | ISO date `YYYY-MM-DD` for run stamps, integer for `schema_version` |
+
+Three rows must exist:
+
+| Key | Value |
 |---|---|
-| `A1` | label: `Key` |
-| `B1` | label: `Value` |
-| `A2` | `last_local_run` |
-| `B2` | ISO date string (`YYYY-MM-DD`) of most recent successful local run |
-| `A3` | `last_remote_run` |
-| `B3` | ISO date string (`YYYY-MM-DD`) of most recent successful remote run |
-| `A4` | `schema_version` |
-| `B4` | `1` |
+| last_local_run | *(empty initially; stamped by local cron)* |
+| last_remote_run | *(empty initially; stamped by remote fallback)* |
+| schema_version | 1 |
 
-The remote fallback trigger compares `B2` against today's date. If equal → no-op. If not → run flats skill in WebFetch mode, then write today's date to `B3`.
+The remote fallback trigger queries `last_local_run` before scraping. If its value equals today's date in Europe/Zurich, the run exits silently.
 
 ---
 
-## Setup
+## Setup (via Notion MCP)
 
-One-time workbook creation is automated via a small Python script (Google Sheets API) or can be done manually:
-
-1. Create a new Google Sheet titled "London Flat Hunt"
-2. Rename the default tab to `Flats`, add a second tab named `Meta`
-3. Paste column headers into row 1 of `Flats` (see table above)
-4. Fill `Meta!A1:B4` per the cell map above (leave `B2` and `B3` empty initially)
-5. Freeze row 1 on `Flats`; enable filter on row 1
-6. Copy the Sheet ID from the URL into `config.md` as `FLAT_TRACKER_SHEET_ID`
-
-### Headers copy-paste block
-
-Paste this single tab-separated line into cell `A1` of the `Flats` tab to populate all 23 headers at once (Google Sheets auto-splits on tabs):
+One-shot creation of the parent page, both databases, and the three Meta rows:
 
 ```
-URL	Platform	Found On	Title	Area	Price	Beds	Size	Size Source	Furnished	Available From	Floor	Bathtub	New/Renovated	Calm	Light	Wooden Floor	Score	Tier	Status	Reason	Needs-verify	Notes
+# 1. Create parent page (private — no parent passed)
+notion-create-pages([{
+  properties: {title: "London Flat Hunt"},
+  icon: "🏠",
+  content: "Automated daily flat hunt tracker — see skill-flats.md"
+}])
+# → returns parent page id, e.g. 345211c872eb81b4ad13d424e27bea4d
+
+# 2. Create Flats database under the parent page
+notion-create-database({
+  title: "Flats",
+  parent: {page_id: "<parent page id>"},
+  schema: `CREATE TABLE (
+    "Title" TITLE,
+    "URL" URL,
+    "Platform" SELECT('Rightmove':blue, 'Zoopla':purple, 'OpenRent':green, 'SpareRoom':orange),
+    "Found On" DATE,
+    "Area" SELECT('Islington':blue, 'Angel':blue, 'Camden Town':blue, 'Kentish Town':blue, 'De Beauvoir Town':blue, 'Highbury':blue, 'Canonbury':blue, 'Clerkenwell':blue, 'Tufnell Park':gray, 'Holloway':gray, 'Bloomsbury':gray, 'Russell Square':gray, 'Barbican':gray, 'Finsbury Park':gray, 'London Bridge':gray, 'Bermondsey':gray),
+    "Price" NUMBER,
+    "Beds" NUMBER,
+    "Size" NUMBER,
+    "Size Source" SELECT('stated-text':green, 'floorplan':green, 'inferred-2bed':yellow, 'inferred-1bed-photos':orange, 'unknown':gray),
+    "Furnished" SELECT('Furnished':blue, 'Part':yellow, 'Unfurnished':green, 'Unknown':gray),
+    "Available From" DATE,
+    "Floor" SELECT('Top':green, 'Mid':yellow, 'Ground':orange, 'Unknown':gray),
+    "Bathtub" SELECT('Yes':green, 'No':red, 'Unknown':gray),
+    "New/Renovated" SELECT('Yes':green, 'No':red, 'Unknown':gray),
+    "Calm" SELECT('Yes':green, 'No':red, 'Unknown':gray),
+    "Light" SELECT('Good':green, 'Avg':yellow, 'Poor':red, 'Unknown':gray),
+    "Wooden Floor" SELECT('Yes':green, 'No':red, 'Unknown':gray),
+    "Score" NUMBER,
+    "Tier" SELECT('HIGH':green, 'MEDIUM':yellow, 'LOW':red),
+    "Status" SELECT('NEW':red, 'CONTACTED':yellow, 'VIEWING':blue, 'REJECTED':gray, 'GONE':default),
+    "Reason" RICH_TEXT,
+    "Needs-verify" RICH_TEXT,
+    "Notes" RICH_TEXT
+  )`
+})
+# → returns Flats data source id, e.g. c417b1a4-2ebd-4686-85ec-ca1219a8b0d4
+
+# 3. Create Meta database
+notion-create-database({
+  title: "Meta",
+  parent: {page_id: "<parent page id>"},
+  schema: `CREATE TABLE (
+    "Key" TITLE,
+    "Value" RICH_TEXT COMMENT 'ISO date for run stamps, integer for schema_version'
+  )`
+})
+# → returns Meta data source id, e.g. e914a179-d983-4730-b863-97d188843f90
+
+# 4. Seed Meta rows
+notion-create-pages({
+  parent: {type: "data_source_id", data_source_id: "<meta data source id>"},
+  pages: [
+    {properties: {Key: "last_local_run", Value: ""}},
+    {properties: {Key: "last_remote_run", Value: ""}},
+    {properties: {Key: "schema_version", Value: "1"}}
+  ]
+})
+
+# 5. Paste the three IDs into config.md:
+#    FLAT_TRACKER_NOTION_PARENT_PAGE_ID, FLAT_TRACKER_FLATS_DATA_SOURCE_ID, FLAT_TRACKER_META_DATA_SOURCE_ID
 ```
 
-The skill creates missing tabs and headers on first run if the workbook is empty, but starting from the correct structure avoids first-run friction.
+## Historical note
+
+Earlier versions of this repo used a Google Sheet tracker. That approach didn't survive remote execution: the claude.ai Google Drive MCP connector can read and create files but cannot modify cells in an existing Sheet, so neither local nor remote runs could persist listings reliably. The Notion MCP has full CRUD and cleanly supports both write paths.

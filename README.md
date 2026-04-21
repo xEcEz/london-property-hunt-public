@@ -19,7 +19,7 @@ This repo ships **two** skill variants. Pick one via `HUNT_MODE` in your `config
 | Variant | Skill file | Tracker | Who should use it |
 |---|---|---|---|
 | **Rooms** (default) | [`skill.md`](skill.md) | Local xlsx (`openpyxl`) | Renting a room in a shared 2–3 bed flat; SpareRoom-heavy |
-| **Flats** | [`skill-flats.md`](skill-flats.md) | [Notion](tracker/flats-schema.md) (Notion MCP) | Renting a whole 1–2 bed flat; scoring on top-floor / new-build / calm / bathtub / light / wooden floor |
+| **Flats** | [`skill-flats.md`](skill-flats.md) | [Notion](tracker/flats-schema.md) (Notion MCP) | Renting a whole 1–2 bed flat; alert-emails + local scraping; scoring on top-floor / new-build / calm / bathtub / light / wooden floor |
 
 The two variants are independent — they share the same `config.example.md` template and outreach folder convention, nothing else.
 
@@ -48,7 +48,8 @@ london-property-hunt/
 ├── case-study.md          ← write-up of how this workflow was built and what it produced
 ├── tracker/
 │   ├── README.md          ← rooms tracker (xlsx) column schema
-│   └── flats-schema.md    ← flats tracker (Google Sheet) column schema
+│   ├── flats-schema.md    ← flats tracker (Notion) column schema
+│   └── alerts-setup.md    ← flats per-portal saved-search email alerts
 ├── outreach/              ← generated outreach .txt files land here (gitignored)
 └── .gitignore
 ```
@@ -95,6 +96,8 @@ mkdir -p ~/hunt/outreach
 ```
 
 Create the Notion tracker via the one-shot setup snippet in [tracker/flats-schema.md](tracker/flats-schema.md) — it creates a parent page, both databases (Flats + Meta), and the three Meta rows. Paste the three resulting IDs into `FLAT_TRACKER_*` in your `config.md`.
+
+Set up portal email alerts (primary ingestion path): see [tracker/alerts-setup.md](tracker/alerts-setup.md).
 
 ### 3. Install the skill in Claude Code
 

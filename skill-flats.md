@@ -13,10 +13,13 @@ You are running [YOUR_NAME]'s London flat hunt (1–2 bed whole-unit rentals). D
 
 ## RUNTIME MODE
 
-- Local runs (Claude-in-Chrome available): use the browser MCP for Rightmove and Zoopla photos/floorplans.
-- Remote runs (WebFetch only): use WebFetch for all listings; floorplan extraction may be degraded — mark `Size Source=unknown` and `Needs-verify: size (remote run)` when floorplans can't be loaded.
+Always run alert ingestion first (§ALERT INGESTION below). It works in both local and remote modes.
 
-Detect remote mode by checking if `Claude-in-Chrome` MCP tools are available. If not → WebFetch mode.
+After alerts are processed, conditionally run scraping:
+- Local (Claude-in-Chrome MCP available) → use browser MCP for Rightmove / Zoopla / SpareRoom / OpenRent search pages (full fidelity: photos, floorplans).
+- Remote (WebFetch only, no Claude-in-Chrome) → SKIP scraping. Alert ingestion is your only source.
+
+Detect runtime mode by checking if Claude-in-Chrome MCP tools are available. If not → WebFetch mode, skip scraping.
 
 ## WHO IS [YOUR_NAME]
 - [YOUR_AGE]yo [YOUR_NATIONALITY] [YOUR_PROFESSION] at [YOUR_EMPLOYER_TYPE]
@@ -69,7 +72,51 @@ Tiers:
 
 **Cap:** size-unknown 1-beds (rule 4 above) → tier cannot exceed MEDIUM even if score ≥ HIGH threshold.
 
-## PLATFORMS
+## ALERT INGESTION (runs first, both local and remote)
+
+Read portal saved-search alert emails from Raphael's Gmail and convert them into Flats rows.
+
+### Gmail query
+
+Call `mcp__claude_ai_Gmail__search_threads` with:
+
+(from:(@rightmove.co.uk) OR from:(@zoopla.co.uk) OR from:(@spareroom.co.uk) OR from:(@openrent.co.uk)) AND newer_than:2d AND -label:hunt-processed
+
+Rationale: sender-domain filter catches portal transactional mail; `-label:hunt-processed` avoids reprocessing; `newer_than:2d` catches backlog after weekend laptop-off periods.
+
+### For each matched thread
+
+1. Fetch full body via `mcp__claude_ai_Gmail__get_thread`.
+2. Extract listing URLs by matching portal patterns:
+   - Rightmove: `https://www.rightmove.co.uk/properties/<id>`
+   - Zoopla: `https://www.zoopla.co.uk/to-rent/details/<id>/`
+   - SpareRoom: `https://www.spareroom.co.uk/flatshare/flatshare_detail.pl?flatshare_id=<id>` or `/flats-to-rent/...`
+   - OpenRent: `https://www.openrent.co.uk/property-to-rent/...` with numeric id
+3. De-redirect tracking wrappers (e.g. `rightmove.co.uk/redirect?...`) by following to the final URL.
+4. Dedup within the email (alerts sometimes list the same listing twice).
+
+### For each extracted URL
+
+1. Query Notion Flats data source (id `[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]`) for `URL == <candidate>`. If any match, skip this URL.
+2. Otherwise fetch the individual listing page:
+   - Local mode: Claude-in-Chrome
+   - Remote mode: WebFetch
+3. If page fetch succeeds → extract all available signals per § SCORING, score, create Notion row with `Source=email-alert`.
+4. If page fetch fails (403, timeout, any error) → still create a Notion row using data from the alert email (title, price, beds, URL). Set `Size Source=unknown`, `Needs-verify: listing page unreachable`, `Source=email-alert`. Skip scoring (leave `Score` and `Tier` empty).
+
+### Label-after-handling
+
+After each successfully-processed thread (whether all URLs led to new rows or all were dedup-skipped), call `mcp__claude_ai_Gmail__label_thread` with label `hunt-processed`. On first run, if the label doesn't exist, create it via `mcp__claude_ai_Gmail__create_label`.
+
+Errors during labeling are non-fatal — URL dedup handles the duplicate-processing case.
+
+### When to skip
+
+If an alert email has zero extractable URLs (e.g. marketing template), do NOT label it. A future run may retry if the email content changes. Log the skip but don't fail.
+
+## SCRAPING (local mode only)
+
+**Skip this section entirely in remote WebFetch-only mode** — rely on alert ingestion instead.
 
 Search all four. URLs assembled from config areas + budget. Max price = £[FLAT_BUDGET_HARD_CAP].
 
@@ -85,9 +132,17 @@ Notion workspace with two databases under parent page [FLAT_TRACKER_NOTION_PAREN
 - **Flats database** — data source id [FLAT_TRACKER_FLATS_DATA_SOURCE_ID]. One page per listing.
 - **Meta database** — data source id [FLAT_TRACKER_META_DATA_SOURCE_ID]. Key/Value rows for `last_local_run`, `last_remote_run`, `schema_version`.
 
-Properties on Flats (see tracker/flats-schema.md for full types): Title (title), URL, Platform, Found On, Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status, Reason, Needs-verify, Notes.
+Properties on Flats (see tracker/flats-schema.md for full types): Title (title), URL, Platform, Found On, Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status, Reason, Needs-verify, Notes, Source.
 
 Dedup: before inserting, query the Flats data source filtered on `URL == <candidate URL>`. Skip if any match.
+
+Set `Source` on every new row:
+- `email-alert` when the row came from the Alert Ingestion path
+- `scraped-local` when from scraping in local mode (Claude-in-Chrome)
+- `scraped-remote` when from scraping in remote WebFetch mode (this should be rare — remote mode skips scraping in the new architecture)
+
+If dedup catches a URL, do NOT overwrite `Source` on the existing row.
+
 New rows: Status = `NEW`, Found On = today (YYYY-MM-DD, Europe/Zurich). Use `notion-create-pages` with `parent.type = "data_source_id"`.
 
 Colour coding is automatic — the Tier select property has green/yellow/red options for HIGH/MEDIUM/LOW.
@@ -154,13 +209,15 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 
 ## SUCCESS CRITERIA
 
-- Flats database has new pages for every listing that passed hard filters (one page per unique URL)
+- Alert emails queried for the target sender domains in the last 2 days
+- Processed alert threads labeled `hunt-processed` in Gmail
+- Flats database has new pages for every listing that passed hard filters and survived URL dedup, with `Source` correctly set
 - Meta database: `last_local_run` stamped on local runs; `last_remote_run` stamped on remote runs
 - No listings added that violate hard filters
-- No duplicates created (URL dedup via Meta query works)
+- No duplicate URLs in Notion (dedup holds across both ingestion paths)
 - HIGH tier caps respected for size-unknown 1-beds
-- Outreach .txt files saved for HIGH priority (local mode only — remote mode skips file writes and inlines outreach in the email)
-- Email draft created (local mode also clicks Send; remote mode leaves as draft for manual review + send)
+- Outreach .txt files saved for HIGH priority (local mode only)
+- Email draft created (local mode also clicks Send; remote mode leaves as draft for the Apps Script auto-sender)
 ```
 
 ---

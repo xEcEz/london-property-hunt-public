@@ -101,8 +101,9 @@ Rationale: sender-domain filter catches portal transactional mail; `-label:hunt-
 2. Otherwise fetch the individual listing page:
    - Local mode: Claude-in-Chrome
    - Remote mode: WebFetch
-3. If page fetch succeeds → extract all available signals per § SCORING, score, create Notion row with `Source=email-alert`.
-4. If page fetch fails (403, timeout, any error) → still create a Notion row using data from the alert email (title, price, beds, URL). Set `Size Source=unknown`, `Needs-verify: listing page unreachable`, `Source=email-alert`. Skip scoring (leave `Score` and `Tier` empty).
+3. Apply HARD FILTERS (see section above) to the listing. If it violates any filter (beds outside 1–2, rent > hard cap, area not in primary ∪ secondary, stated size < 60 m², obviously dated/unrenovated), do NOT create a Notion row — log the skip and move to the next URL.
+4. If the listing passes hard filters and page fetch succeeded → extract all available signals per § SCORING, score, create Notion row with `Source=email-alert`.
+5. If page fetch failed but the alert email content alone did not trigger a hard-filter rejection → create a minimal Notion row using alert-email data (title, price, beds, URL). Set `Size Source=unknown`, `Needs-verify: listing page unreachable`, `Source=email-alert`. Skip scoring (leave `Score` and `Tier` empty).
 
 ### Label-after-handling
 
@@ -149,7 +150,9 @@ Colour coding is automatic — the Tier select property has green/yellow/red opt
 
 ## REMOTE FALLBACK LOGIC (WebFetch mode only)
 
-Before doing anything else in WebFetch mode:
+Alert ingestion (§ALERT INGESTION above) always runs first, regardless of mode. This REMOTE FALLBACK LOGIC section governs **only** the Meta-stamp check, the email-creation step, and whether scraping runs — it does NOT gate alert ingestion.
+
+In WebFetch mode, after alert ingestion completes:
 1. Query the Meta data source for `Key == "last_local_run"`. Read its Value.
 2. If Value equals today's YYYY-MM-DD (Europe/Zurich) → exit silently. Do not email. Do not scrape. Do not update Meta.
 3. Else → proceed with full search. On success, find the `last_remote_run` row in Meta and call `notion-update-page` to set its Value to today's YYYY-MM-DD.
@@ -158,7 +161,7 @@ In local mode (Claude-in-Chrome available): on success, update the `last_local_r
 
 ## EMAIL — SELF-CONTAINED, PHONE-READY
 
-Use `gmail_create_draft` (contentType: text/html), To: [YOUR_EMAIL].
+Use `mcp__claude_ai_Gmail__create_draft` (contentType: text/html), To: [YOUR_EMAIL].
 
 Subject: 🏠 London Flat Hunt — {DATE} — {N} new (H:{high}/M:{med}/L:{low})
 

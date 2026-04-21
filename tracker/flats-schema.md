@@ -42,8 +42,9 @@ Both sit under a parent page called `London Flat Hunt`.
 | Reason | rich_text | One-line scoring summary |
 | Needs-verify | rich_text | Comma-separated list of unresolved signals |
 | Notes | rich_text | Free-form |
+| Source | select | email-alert / scraped-local / scraped-remote — which ingestion path added this row |
 
-23 properties total. Tier select colours render HIGH/MEDIUM/LOW rows green/yellow/red automatically.
+24 properties total (23 original + Source). Tier select colours render HIGH/MEDIUM/LOW rows green/yellow/red automatically. Source is colour-coded (email-alert=green, scraped-local=blue, scraped-remote=purple) for scanability but has no semantic tier meaning.
 
 ### Deduplication
 
@@ -110,7 +111,8 @@ notion-create-database({
     "Status" SELECT('NEW':red, 'CONTACTED':yellow, 'VIEWING':blue, 'REJECTED':gray, 'GONE':default),
     "Reason" RICH_TEXT,
     "Needs-verify" RICH_TEXT,
-    "Notes" RICH_TEXT
+    "Notes" RICH_TEXT,
+    "Source" SELECT('email-alert':green, 'scraped-local':blue, 'scraped-remote':purple)
   )`
 })
 # → returns Flats data source id, e.g. c417b1a4-2ebd-4686-85ec-ca1219a8b0d4

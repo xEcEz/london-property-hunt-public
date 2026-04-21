@@ -80,9 +80,9 @@ Read portal saved-search alert emails from Raphael's Gmail and convert them into
 
 Call `mcp__claude_ai_Gmail__search_threads` with:
 
-(from:(@rightmove.co.uk) OR from:(@zoopla.co.uk) OR from:(@spareroom.co.uk) OR from:(@openrent.co.uk)) AND newer_than:2d AND -label:hunt-processed
+(from:(rightmove.co.uk) OR from:(zoopla.co.uk) OR from:(spareroom.co.uk) OR from:(openrent.co.uk) OR from:(openrent.com)) AND newer_than:2d AND -label:hunt-processed
 
-Rationale: sender-domain filter catches portal transactional mail; `-label:hunt-processed` avoids reprocessing; `newer_than:2d` catches backlog after weekend laptop-off periods.
+Rationale: sender-domain substring filter catches portal transactional mail including subdomains (e.g. `news@email.zoopla.co.uk`, `property-alerts@rightmove.co.uk`); `-label:hunt-processed` avoids reprocessing; `newer_than:2d` catches backlog after weekend laptop-off periods.
 
 ### For each matched thread
 

@@ -77,13 +77,16 @@ FLATMATE_MAX_AGE=40
 ## Email
 
 ```
-YOUR_EMAIL=you@gmail.com
+YOUR_EMAIL=you@gmail.com             # sender — the Gmail account authenticated in the MCP
+FLAT_EMAIL_TO=you@gmail.com          # destination — where the hunt digest is delivered (flats variant; can differ from YOUR_EMAIL if you want the digest to land in a different inbox)
 GMAIL_ACCOUNT_INDEX=0
 ```
 
 `GMAIL_ACCOUNT_INDEX`: Gmail MCP uses account index to identify which Gmail account to use.
 - `0` = your first/primary Google account signed in
 - `1` = second account (useful if your hunt email is different from your main account)
+
+`FLAT_EMAIL_TO` is the flats-variant-specific destination for the daily digest. If you want the hunt email to land in your main inbox while being sent from a dedicated hunt Gmail, set this to your main address. If you want the sender and recipient to be the same, set it equal to `YOUR_EMAIL`.
 
 ## File paths
 

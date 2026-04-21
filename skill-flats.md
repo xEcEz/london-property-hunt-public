@@ -87,13 +87,24 @@ Rationale: sender-domain substring filter catches portal transactional mail incl
 ### For each matched thread
 
 1. Fetch full body via `mcp__claude_ai_Gmail__get_thread`.
-2. Extract listing URLs by matching portal patterns:
+2. **Search both plaintext AND HTML bodies** for listing URLs. Zoopla in particular only puts per-listing links in the HTML part — the plaintext usually contains just the homepage root and marketing copy. If the tool returns the thread with both `body` / `plaintextBody` and `htmlBody` / `rawBody`, check all of them. If only plaintext is exposed, query Gmail again with `format=full` or `format=raw` to get the MIME parts.
+3. Extract listing URLs by matching portal patterns:
    - Rightmove: `https://www.rightmove.co.uk/properties/<id>`
    - Zoopla: `https://www.zoopla.co.uk/to-rent/details/<id>/`
    - SpareRoom: `https://www.spareroom.co.uk/flatshare/flatshare_detail.pl?flatshare_id=<id>` or `/flats-to-rent/...`
    - OpenRent: `https://www.openrent.co.uk/property-to-rent/...` with numeric id
-3. De-redirect tracking wrappers (e.g. `rightmove.co.uk/redirect?...`) by following to the final URL.
-4. Dedup within the email (alerts sometimes list the same listing twice).
+4. **Unwrap tracker-wrapped links.** Portal alert emails wrap their listing URLs in click-tracking redirects that look like:
+   - Zoopla: `https://comms-2.zoopla.co.uk/l/?link=<URL-encoded target>` or `https://links.zoopla.co.uk/...`
+   - Rightmove: `https://www.rightmove.co.uk/redirect?...` or `https://email.rightmove.co.uk/q/...`
+   - OpenRent: `https://openrent.us.list-manage.com/track/click?...`
+   - SpareRoom: `https://click.spareroom.co.uk/...`
+
+   Two unwrap strategies, try in order:
+   (a) **Parse the query string.** Look for a `link=`, `url=`, `u=`, `target=`, or `destination=` parameter. URL-decode it. If it matches a portal listing pattern (step 3), use it directly — no HTTP fetch needed.
+   (b) **Follow the redirect.** If the wrapper's query string doesn't contain the target URL, HEAD or GET the tracker URL and follow the `Location:` redirect chain until you land on a portal listing URL.
+
+   Only use strategy (b) when (a) can't extract the target — it costs a network hop and may be rate-limited.
+5. Dedup within the email (alerts sometimes list the same listing twice or link to the same listing via different tracker URLs).
 
 ### For each extracted URL
 
@@ -161,7 +172,7 @@ In local mode (Claude-in-Chrome available): on success, update the `last_local_r
 
 ## EMAIL — SELF-CONTAINED, PHONE-READY
 
-Use `mcp__claude_ai_Gmail__create_draft` (contentType: text/html), To: [YOUR_EMAIL].
+Use `mcp__claude_ai_Gmail__create_draft` (contentType: text/html), To: [FLAT_EMAIL_TO] (destination — the hunt digest target inbox, usually different from `[YOUR_EMAIL]` which is the sender account).
 
 Subject: 🏠 London Flat Hunt — {DATE} — {N} new (H:{high}/M:{med}/L:{low})
 
@@ -239,6 +250,7 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 | `[FLAT_TRACKER_NOTION_PARENT_PAGE_ID]` | Notion page ID (32 hex, no dashes or with dashes) of the parent "London Flat Hunt" page | config.md |
 | `[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]` | Notion data source ID for the Flats database | config.md |
 | `[FLAT_TRACKER_META_DATA_SOURCE_ID]` | Notion data source ID for the Meta database | config.md |
+| `[FLAT_EMAIL_TO]` | Email address where the hunt digest is delivered (usually your main inbox) | config.md |
 | `[REGION_CODE]` | Rightmove region identifier for London (`REGION%5E87490`) or tighter (per area); leave as-is if unsure | hardcode in skill |
 | `[AREA_SLUG]` | zoopla/spareroom URL slug for area (lowercase, underscores) | derived from FLAT_PRIMARY_AREAS |
 | `[AREAS_CSV]` | comma-separated areas for OpenRent's `term=` | derived from FLAT_PRIMARY_AREAS |

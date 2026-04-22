@@ -148,7 +148,7 @@ If Playwright is available, this section **MUST** run to completion for all 4 po
 Only legitimate reasons to skip or abort scraping:
 - Playwright unavailable (probe below fails).
 - A single `mcp__playwright__browser_navigate` exceeds 30s timeout → skip that portal-area only, continue with the next.
-- Total scraping wall-clock exceeds 25 min → mid-run kill (log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL). This is a hard stop, **not** a pre-flight deferral.
+- Total scraping wall-clock exceeds 60 min → mid-run kill (log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL). This is a hard stop, **not** a pre-flight deferral.
 
 ### Playwright availability probe
 
@@ -198,9 +198,9 @@ Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slug
 7. **Enrichment (Rightmove / Zoopla):**
    a. Call `mcp__playwright__browser_navigate` with the listing URL.
    b. Call `mcp__playwright__browser_evaluate` with a portal-specific snippet that pulls title / price / beds / size / floor / furnished / available-from / description text / amenity hints, **plus floorplan image URL(s) and listing photo URLs with captions**. Examples:
-      - Rightmove: `() => { const m = window.PAGE_MODEL; if (!m) return null; const p = m.propertyData || {}; return { ...p, _floorplanUrl: (p.floorplans || [])[0]?.url || null, _photos: (p.images || []).map(i => ({ url: i.url, caption: i.caption })) }; }` then parse the result.
+      - Rightmove: `() => { const m = window.PAGE_MODEL; if (!m) return null; const p = m.propertyData || {}; return { ...p, _floorplanUrl: ((p.floorplans || p.floorplanImages || [])[0]?.url) || null, _photos: (p.images || []).map(i => ({ url: i.url, caption: i.caption })) }; }` then parse the result.
       - Zoopla: `() => { const d = window.__PRELOADED_STATE__ || JSON.parse(document.querySelector('script#__NEXT_DATA__')?.textContent || '{}'); return d; }` then locate the listing object, floorplan URL (path varies — look for a `floorPlanImages`, `floorPlan`, `floorplan`, or `floorPlanImage` key in the listing data), and photo array.
-   c. **Cheap hard filters (structured data only):** reject immediately if beds outside 1–2, or rent > [FLAT_BUDGET_HARD_CAP], or area not in primary ∪ secondary. These use only structured JSON. If any fails → skip this listing entirely, no visual extraction.
+   c. **Cheap hard filters (structured data only):** reject immediately if beds outside 1–2, or rent > [FLAT_BUDGET_HARD_CAP], or area not in primary ∪ secondary. These use only structured JSON. If any fails → skip this listing entirely, no visual extraction. (Note: "obviously dated/unrenovated" is NOT a cheap filter for RM/Zoopla — photos now provide the New/Renovated signal via step 7f, and § SCORING already penalizes dated listings.)
    d. **Size-gate check:** if the structured JSON provides a sensible size (positive number in m² or sq ft, between 10 m² and 500 m², not in nonsensical units like hectares) AND that size is below [FLAT_SIZE_FLOOR_M2] → reject immediately, no visual extraction.
    e. **Floorplan pass (Rightmove / Zoopla only, if floorplan URL exists):** see § VISUAL EXTRACTION — FLOORPLAN below.
    f. **Photo pass (Rightmove / Zoopla only, if listing photos exist):** see § VISUAL EXTRACTION — PHOTOS below.
@@ -277,7 +277,7 @@ Paginate to page 2, then page 3, capped at 3 pages total, subject to this early-
 
 ### Rate limiting
 
-- 2-second wait between `mcp__playwright__browser_navigate` calls on the same portal.
+- 2-second wait between `mcp__playwright__browser_navigate` calls to portal search pages and listing pages on the same portal. This rate limit does NOT apply to CDN image URLs (floorplans, listing photos) — those can be navigated without delay.
 - Portals processed sequentially, not in parallel.
 - Typical scrape runtime: 15–30 minutes (with visual extraction). **Hard kill at 60 minutes** of scraping wall-clock — if reached, log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL with whatever was captured. This is an in-progress interrupt only; it never justifies pre-flight skip. Start scraping immediately after the availability probe succeeds.
 

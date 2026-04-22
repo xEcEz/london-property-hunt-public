@@ -12,6 +12,19 @@ Every run sends you an email like this — clickable listings, ready-to-send out
 
 ---
 
+## Variants
+
+This repo ships **two** skill variants. Pick one via `HUNT_MODE` in your `config.md`.
+
+| Variant | Skill file | Tracker | Who should use it |
+|---|---|---|---|
+| **Rooms** (default) | [`skill.md`](skill.md) | Local xlsx (`openpyxl`) | Renting a room in a shared 2–3 bed flat; SpareRoom-heavy |
+| **Flats** | [`skill-flats.md`](skill-flats.md) | [Notion](tracker/flats-schema.md) (Notion MCP) | Renting a whole 1–2 bed flat; alert-emails + local scraping; scoring on top-floor / new-build / calm / bathtub / light / wooden floor |
+
+The two variants are independent — they share the same `config.example.md` template and outreach folder convention, nothing else.
+
+---
+
 ## What it does
 
 1. **Searches 4 platforms** — SpareRoom, OpenRent, Rightmove, Zoopla — across your target areas
@@ -29,11 +42,14 @@ Runs on a cron schedule (e.g. 9 AM and 6 PM daily). Human effort required: zero 
 ```
 london-property-hunt/
 ├── README.md              ← you are here
-├── skill.md               ← the main Claude Code skill (copy-paste into your setup)
+├── skill.md               ← rooms variant — shared-room hunt (default)
+├── skill-flats.md         ← flats variant — 1–2 bed whole-unit hunt
 ├── config.example.md      ← fill in your personal config here
 ├── case-study.md          ← write-up of how this workflow was built and what it produced
 ├── tracker/
-│   └── README.md          ← spreadsheet column schema and setup instructions
+│   ├── README.md          ← rooms tracker (xlsx) column schema
+│   ├── flats-schema.md    ← flats tracker (Notion) column schema
+│   └── alerts-setup.md    ← flats per-portal saved-search email alerts
 ├── outreach/              ← generated outreach .txt files land here (gitignored)
 └── .gitignore
 ```
@@ -43,10 +59,11 @@ london-property-hunt/
 ## Requirements
 
 - **Claude Code** (CLI or desktop app) — [claude.ai/code](https://claude.ai/code)
-- **Claude in Chrome** MCP extension — for browser automation (SpareRoom, OpenRent, etc.)
-- **Gmail MCP connector** — for draft creation and sending
-- **Python 3 + openpyxl** — for spreadsheet updates (`pip install openpyxl`)
-- A Gmail account you can grant MCP access to
+- **Playwright MCP** — *flats variant only* — for residential-IP browser scraping. Install with `claude mcp add --scope user playwright -- npx '@playwright/mcp@latest'`. Downloads its own Chromium on first use (~150MB). Runs headless — no user-facing browser window required.
+- **Gmail MCP connector** — for inbox reading (alert ingestion), draft creation, and `hunt-processed` labeling.
+- **Notion MCP connector** — *flats variant only* — for the Notion-based tracker (full CRUD).
+- **Python 3 + openpyxl** — *rooms variant only* — for xlsx spreadsheet updates (`pip install openpyxl`).
+- A Gmail / Google account you can grant MCP access to.
 
 ---
 
@@ -62,7 +79,9 @@ cp config.example.md config.md
 
 Edit `config.md` — fill in your name, target areas, budget, move-in date, and email.
 
-### 2. Create your tracker spreadsheet
+### 2. Create your tracker
+
+**Rooms variant** (local xlsx):
 
 ```bash
 mkdir -p ~/London-Room-Hunt/outreach
@@ -70,9 +89,24 @@ mkdir -p ~/London-Room-Hunt/outreach
 
 On first run the skill creates the spreadsheet automatically at the path in your config. Or create it manually — see [tracker/README.md](tracker/README.md) for the column schema.
 
+**Flats variant** (Notion):
+
+```bash
+mkdir -p ~/hunt/outreach
+```
+
+Create the Notion tracker via the one-shot setup snippet in [tracker/flats-schema.md](tracker/flats-schema.md) — it creates a parent page, both databases (Flats + Meta), and the three Meta rows. Paste the three resulting IDs into `FLAT_TRACKER_*` in your `config.md`.
+
+Set up portal email alerts (primary ingestion path): see [tracker/alerts-setup.md](tracker/alerts-setup.md).
+
 ### 3. Install the skill in Claude Code
 
-Copy the contents of `skill.md` and paste it as a new skill in Claude Code, or point your Claude Code config at this file.
+Pick the skill file that matches your `HUNT_MODE`:
+
+- `HUNT_MODE=rooms` → copy the contents of [`skill.md`](skill.md)
+- `HUNT_MODE=flats` → copy the contents of [`skill-flats.md`](skill-flats.md)
+
+Paste it as a new skill in Claude Code, or point your Claude Code config at the file.
 
 Alternatively, run it manually:
 
@@ -82,11 +116,36 @@ claude "Run the London property hunt — search all platforms, update tracker, s
 
 ### 4. Schedule it
 
-In Claude Code, use `/schedule` to run it twice a day:
+**Rooms variant** (local xlsx, any single schedule works):
 
 ```
 /schedule 0 9,18 * * * Run the London property hunt skill
 ```
+
+**Flats variant** (local cron + remote fallback — recommended so missed days are self-healing):
+
+1. **Local cron** (10:00 London time, uses Claude-in-Chrome for full fidelity):
+
+   ```bash
+   crontab -e
+   # add:
+   0 10 * * * cd ~/hunt && /usr/local/bin/claude "Run the London flat hunt skill" >> ~/hunt/cron.log 2>&1
+   ```
+
+2. **Remote fallback trigger** (15:00 London time, no-ops if local already ran):
+
+   In Claude Code:
+   ```
+   /schedule 0 15 * * * Run the London flat hunt skill (remote fallback mode)
+   ```
+
+   The skill reads the `last_local_run` row in the Meta database and exits silently if the local run already stamped today.
+
+3. **Weekly health check** (optional; Mondays 09:00):
+
+   ```
+   /schedule 0 9 * * 1 Check last_local_run and last_remote_run rows in the Meta database; if either is more than 2 days stale, send a one-line status email.
+   ```
 
 ---
 
@@ -179,5 +238,5 @@ See [case-study.md](case-study.md) for a full write-up: how this was built, what
 
 ---
 
-*Built with Claude Code + Claude in Chrome + Gmail MCP*
+*Built with Claude Code + Playwright MCP + Gmail MCP*
 *Generated: April 2026*

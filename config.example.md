@@ -5,12 +5,28 @@
 
 ---
 
+## Mode
+
+```
+HUNT_MODE=rooms
+```
+
+`HUNT_MODE` selects which skill variant runs:
+- `rooms` — shared-room hunt (uses `skill.md`, xlsx tracker)
+- `flats` — whole-unit 1–2 bed hunt (uses `skill-flats.md`, Google Sheet tracker)
+
+All fields below that begin with `FLAT_*` or are under a `## Flats mode` section are ignored in `rooms` mode, and vice versa.
+
+---
+
 ## About you
 
 ```
 YOUR_NAME=Alex
 YOUR_AGE=29
+YOUR_NATIONALITY=British
 YOUR_PROFESSION=Software Engineer
+YOUR_EMPLOYER_TYPE=a fintech startup
 YOUR_PROFILE_DESCRIPTION=easy-going, clean, tidy, cooks, gym, hybrid WFH 2 days/week, no parties, professional
 YOUR_PROFILE_SUMMARY=Clean, tidy, reliable — hybrid WFH, permanent contract
 ```
@@ -61,13 +77,16 @@ FLATMATE_MAX_AGE=40
 ## Email
 
 ```
-YOUR_EMAIL=you@gmail.com
+YOUR_EMAIL=you@gmail.com             # sender — the Gmail account authenticated in the MCP
+FLAT_EMAIL_TO=you@gmail.com          # destination — where the hunt digest is delivered (flats variant; can differ from YOUR_EMAIL if you want the digest to land in a different inbox)
 GMAIL_ACCOUNT_INDEX=0
 ```
 
 `GMAIL_ACCOUNT_INDEX`: Gmail MCP uses account index to identify which Gmail account to use.
 - `0` = your first/primary Google account signed in
 - `1` = second account (useful if your hunt email is different from your main account)
+
+`FLAT_EMAIL_TO` is the flats-variant-specific destination for the daily digest. If you want the hunt email to land in your main inbox while being sent from a dedicated hunt Gmail, set this to your main address. If you want the sender and recipient to be the same, set it equal to `YOUR_EMAIL`.
 
 ## File paths
 
@@ -76,8 +95,9 @@ YOUR_HUNT_DIR=~/my-room-hunt
 ```
 
 The skill will:
-- Read/write `$YOUR_HUNT_DIR/london_room_hunt.xlsx`
-- Save outreach files to `$YOUR_HUNT_DIR/outreach/`
+- **Rooms variant:** read/write `$YOUR_HUNT_DIR/london_room_hunt.xlsx`
+- **Flats variant:** read/write the Notion databases referenced by `FLAT_TRACKER_*_DATA_SOURCE_ID` (tracker is not local)
+- Save outreach files to `$YOUR_HUNT_DIR/outreach/` (both variants, local mode only)
 
 Make sure the directory exists before running:
 ```bash
@@ -113,3 +133,63 @@ SPAREROOM_STUDIO_URLS=
 
 - You can update this file any time — just re-run the skill and it picks up changes
 - If you find a place and want to stop the scheduled runs, delete the schedule: `/schedule list` then `/schedule delete [id]`
+
+---
+
+## Flats mode (only used if `HUNT_MODE=flats`)
+
+### Unit criteria
+
+```
+FLAT_BEDROOMS_MIN=1
+FLAT_BEDROOMS_MAX=2
+FLAT_SIZE_FLOOR_M2=60
+FLAT_FURNISHED_PREFERENCE=unfurnished   # unfurnished | furnished | any
+```
+
+### Budget
+
+```
+FLAT_BUDGET_SWEET_MAX=3200
+FLAT_BUDGET_HARD_CAP=3500
+FLAT_STRETCH_PENALTY=1
+```
+
+### Areas (ordered by priority)
+
+```
+FLAT_PRIMARY_AREAS=Islington, Angel, Camden Town, Kentish Town, De Beauvoir Town, Highbury, Canonbury, Clerkenwell
+FLAT_SECONDARY_AREAS=Tufnell Park, Holloway, Bloomsbury, Russell Square, Barbican, Finsbury Park, London Bridge, Bermondsey
+```
+
+### Scoring weights (overrides — defaults in skill-flats.md)
+
+```
+FLAT_WEIGHT_TOP_FLOOR=3
+FLAT_WEIGHT_NEW_BUILD=3
+FLAT_WEIGHT_CALM=2
+FLAT_WEIGHT_BATHTUB=1
+FLAT_WEIGHT_LIGHT=1
+FLAT_WEIGHT_WOODEN_FLOOR=1
+FLAT_TIER_HIGH_THRESHOLD=7
+FLAT_TIER_MEDIUM_THRESHOLD=4
+```
+
+### Tracker (Notion)
+
+```
+FLAT_TRACKER_NOTION_PARENT_PAGE_ID=00000000000000000000000000000000
+FLAT_TRACKER_FLATS_DATA_SOURCE_ID=00000000-0000-0000-0000-000000000000
+FLAT_TRACKER_META_DATA_SOURCE_ID=00000000-0000-0000-0000-000000000000
+```
+
+Create a Notion page titled "London Flat Hunt" (private-scope), then under it create two databases named `Flats` and `Meta` per `tracker/flats-schema.md`. Paste the parent page ID and each database's data source ID above.
+
+A one-shot setup script is available in `tracker/flats-schema.md` that shows the exact DDL / Notion MCP calls to create both databases with the right schemas and the three Meta rows (`last_local_run`, `last_remote_run`, `schema_version=1`).
+
+### Outreach
+
+```
+FLAT_OUTREACH_STYLE=agent   # agent | landlord
+FLAT_OUTREACH_AVAILABILITY=weekday evenings and weekends
+```

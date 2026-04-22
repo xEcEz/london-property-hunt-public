@@ -131,16 +131,86 @@ If an alert email has zero extractable URLs (e.g. a marketing template, or a tem
 - **Primary:** Gmail `hunt-processed` label — excludes handled threads from the main query.
 - **Secondary:** Notion URL column — every extracted URL is O(1) checked before any listing page is fetched. Catches cases where a listing was seen on a prior run via a different path (scraping vs. alert, or an email we had to re-process after fixing the parser).
 
-## SCRAPING (local mode only)
+## SCRAPING (local mode only, Playwright MCP)
 
-**Skip this section entirely in remote WebFetch-only mode** — rely on alert ingestion instead.
+Drives a real Chromium from the laptop's residential IP via Playwright MCP. Bypasses the datacenter-IP gating that blocks WebFetch on Rightmove / Zoopla / SpareRoom.
 
-Search all four. URLs assembled from config areas + budget. Max price = £[FLAT_BUDGET_HARD_CAP].
+**Skip this section entirely in remote WebFetch-only mode** — the remote trigger has no Playwright MCP available. Alert ingestion is the only remote input.
 
-- Rightmove: https://www.rightmove.co.uk/property-to-rent/find.html?searchType=RENT&locationIdentifier=[REGION_CODE]&minBedrooms=[FLAT_BEDROOMS_MIN]&maxBedrooms=[FLAT_BEDROOMS_MAX]&maxPrice=[FLAT_BUDGET_HARD_CAP]&propertyTypes=flat&includeLetAgreed=false&sortType=6
-- Zoopla: https://www.zoopla.co.uk/to-rent/flats/[AREA_SLUG]/?beds_min=[FLAT_BEDROOMS_MIN]&beds_max=[FLAT_BEDROOMS_MAX]&price_frequency=per_month&price_max=[FLAT_BUDGET_HARD_CAP]&results_sort=newest_listings
-- OpenRent: https://www.openrent.co.uk/properties-to-rent/london?term=[AREAS_CSV]&prices_max=[FLAT_BUDGET_HARD_CAP]&bedrooms_min=[FLAT_BEDROOMS_MIN]&bedrooms_max=[FLAT_BEDROOMS_MAX]&isLive=true
-- SpareRoom: https://www.spareroom.co.uk/flats-to-rent/london/[AREA_SLUG]?max_rent=[FLAT_BUDGET_HARD_CAP]&min_beds=[FLAT_BEDROOMS_MIN]&max_beds=[FLAT_BEDROOMS_MAX]&sort=posted_date&mode=list
+### Playwright availability probe
+
+At the start of this section, probe Playwright by calling `mcp__playwright__navigate` with URL `https://example.com`. If it succeeds (any title returned), Playwright is healthy — proceed. If it throws or times out within 30s, mark the run as "scraping skipped (Playwright unavailable)" and go straight to the TRACKER + EMAIL steps with only the alert-ingestion results.
+
+### Portal search URLs (primary areas)
+
+Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slugs.
+
+- **Rightmove** (6 URLs covering the 8 primary areas via broader regions):
+  - Islington (covers Islington + Angel + Canonbury): `https://www.rightmove.co.uk/property-to-rent/find.html?locationIdentifier=REGION%5E93965&minBedrooms=[FLAT_BEDROOMS_MIN]&maxBedrooms=[FLAT_BEDROOMS_MAX]&maxPrice=[FLAT_BUDGET_HARD_CAP]&propertyTypes=flat&includeLetAgreed=false&sortType=6`
+  - Highbury: `locationIdentifier=REGION%5E70438`
+  - Camden Town: `locationIdentifier=REGION%5E85262`
+  - Kentish Town: `locationIdentifier=REGION%5E85230`
+  - De Beauvoir Town: `locationIdentifier=REGION%5E70393`
+  - Clerkenwell: `locationIdentifier=REGION%5E87500`
+
+- **Zoopla** (one URL per primary area, slug = lowercased area with dashes):
+  `https://www.zoopla.co.uk/to-rent/flats/[area-slug]/?beds_min=[FLAT_BEDROOMS_MIN]&beds_max=[FLAT_BEDROOMS_MAX]&price_frequency=per_month&price_max=[FLAT_BUDGET_HARD_CAP]&results_sort=newest_listings`
+  Slugs: `islington`, `angel`, `camden-town`, `kentish-town`, `de-beauvoir-town`, `highbury`, `canonbury`, `clerkenwell`.
+
+- **SpareRoom** (one URL per primary area, slug = lowercased area with underscores):
+  `https://www.spareroom.co.uk/flats-to-rent/london/[area_slug]?min_beds=[FLAT_BEDROOMS_MIN]&max_beds=[FLAT_BEDROOMS_MAX]&max_rent=[FLAT_BUDGET_HARD_CAP]&sort=posted_date&mode=list`
+  Slugs: `islington`, `angel`, `camden_town`, `kentish_town`, `de_beauvoir_town`, `highbury`, `canonbury`, `clerkenwell`.
+
+- **OpenRent** (single URL with comma-separated terms):
+  `https://www.openrent.co.uk/properties-to-rent/london?term=Islington,Angel,Camden%20Town,Kentish%20Town,De%20Beauvoir%20Town,Highbury,Canonbury,Clerkenwell&prices_max=[FLAT_BUDGET_HARD_CAP]&bedrooms_min=[FLAT_BEDROOMS_MIN]&bedrooms_max=[FLAT_BEDROOMS_MAX]&isLive=true`
+
+### Scraping loop (per portal-area search URL)
+
+1. Call `mcp__playwright__navigate` with the search URL.
+2. Call `mcp__playwright__snapshot` to get the rendered DOM tree.
+3. Detect block page: if the title or any heading matches `/Access denied|Just a moment|Something went wrong|unusual activity|403 Forbidden/i`, log "Block detected on {portal}/{area}" to the digest, mark this portal-area as blocked, and skip to the next portal-area. No retry.
+4. Otherwise, extract listing URLs from the DOM by matching portal-specific patterns:
+   - Rightmove: anchor `href` matching `/properties/\d+` → full URL `https://www.rightmove.co.uk/properties/<id>`.
+   - Zoopla: anchor `href` matching `/to-rent/details/\d+/` → full URL `https://www.zoopla.co.uk/to-rent/details/<id>/`.
+   - SpareRoom: anchor `href` matching `/flats-to-rent/[^"]+/\d+` or `flatshare_detail.pl?flatshare_id=\d+`.
+   - OpenRent: anchor `href` matching `/property-to-rent/[^"]+/\d+`.
+5. Walk the extracted URLs in the order they appeared on the page (newest-first). For each URL:
+   a. Dedup check (see step 6 below).
+   b. If new → enrich + score + insert (see step 7 below).
+6. **Dedup check (fail-closed):**
+   - Call `mcp__claude_ai_Notion__notion-search` with `query=<URL>`, `data_source_url=collection://[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]`, `page_size=1`, and inspect the result for a page whose URL property equals the candidate.
+   - If the MCP call errors (timeout, 5xx, transient network), retry up to 3× with exponential backoff at 1s, 3s, 9s.
+   - If still failing after 3 retries, **skip this URL** (do NOT insert) and append a line to the digest's "Dedup-check failures" section.
+   - Rationale: Notion `url`-type properties are NOT uniqueness-enforced, so inserting without a successful dedup check can create duplicate rows.
+7. **Enrichment:**
+   - Call `mcp__playwright__navigate` with the listing URL.
+   - Call `mcp__playwright__evaluate` with a portal-specific snippet that pulls title / price / beds / size / floor / furnished / available-from / description text / amenity hints. Examples:
+     - Rightmove: `() => window.PAGE_MODEL || document.querySelector('script#__NEXT_DATA__')?.textContent` then parse JSON.
+     - Zoopla: `() => window.__PRELOADED_STATE__ || document.querySelector('script#__NEXT_DATA__')?.textContent`.
+     - SpareRoom / OpenRent: fall back to querying specific `meta` tags and visible DOM text (each portal documents its layout inline).
+   - Apply HARD FILTERS (beds in 1–2, rent ≤ [FLAT_BUDGET_HARD_CAP], area in primary ∪ secondary, stated size ≥ [FLAT_SIZE_FLOOR_M2] or size-inferred per § SIZE RESOLUTION, not obviously dated). If any filter fails, skip — do NOT create a Notion row.
+   - Score per § SCORING. Call `mcp__claude_ai_Notion__notion-create-pages` with parent `{type: "data_source_id", data_source_id: "[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]"}` and properties: Title, URL, Platform, Found On (today's date, Europe/Zurich), Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status=`NEW`, Reason, Needs-verify, Source=`scraped-local`. Do NOT set Human Tier or Human Rationale.
+   - If listing-page navigate times out or the portal returns an empty/error page for this specific listing, create a minimal Notion row with Title + URL + Platform + Source=`scraped-local` + Needs-verify=`listing page unreachable`, and leave Score + Tier blank.
+
+### Pagination cutoff (per portal-area)
+
+Paginate to page 2, then page 3, capped at 3 pages total, subject to this early-exit rule:
+
+- Track **consecutive known listings** (dedup hits) as you walk the extracted URL list in newest-first order.
+- Reset the counter to 0 whenever you encounter a new URL.
+- **Stop paginating** as soon as 3 consecutive known listings appear — the tracker has caught up for this portal-area.
+- Never early-exit on just 1 or 2 consecutive known listings, because mixed-state scenarios (alert-ingested singletons, prior CAPTCHA'd scrapes, laptop-off streaks) routinely create isolated known entries amid new listings.
+- Always process (enrich + score + insert) every new URL on every visited page, regardless of the exit condition. Early-exit only controls whether you load the next page.
+
+### Rate limiting
+
+- 2-second wait between `mcp__playwright__navigate` calls on the same portal.
+- Portals processed sequentially, not in parallel.
+- Target total scrape runtime: 6–12 minutes typical. If a run exceeds 25 minutes, log and exit to avoid blocking downstream steps.
+
+### Secondary-area cadence
+
+Primary areas (8) scrape every run. **Secondary areas (8) scrape only on Monday runs** (day-of-week = 1 in Europe/Zurich). This halves the daily budget and reflects that secondary areas rarely produce HIGH hits.
 
 ## TRACKER
 

@@ -13,13 +13,17 @@ You are running [YOUR_NAME]'s London flat hunt (1–2 bed whole-unit rentals). D
 
 ## RUNTIME MODE
 
-Always run alert ingestion first (§ALERT INGESTION below). It works in both local and remote modes.
+Two ingestion paths — alert ingestion (§ALERT INGESTION) always runs first in every mode; scraping (§SCRAPING) runs only when the runtime can reach Playwright.
 
-After alerts are processed, conditionally run scraping:
-- Local (Claude-in-Chrome MCP available) → use browser MCP for Rightmove / Zoopla / SpareRoom / OpenRent search pages (full fidelity: photos, floorplans).
-- Remote (WebFetch only, no Claude-in-Chrome) → SKIP scraping. Alert ingestion is your only source.
+**Local mode (laptop cron, residential IP):**
+- Run alert ingestion.
+- Probe Playwright via `mcp__playwright__navigate` to `https://example.com`. If it responds within 30s with no error, run § SCRAPING for all 4 portals. If it fails, log "Playwright unavailable — scraping skipped" and continue.
 
-Detect runtime mode by checking if Claude-in-Chrome MCP tools are available. If not → WebFetch mode, skip scraping.
+**Remote mode (Anthropic-hosted trigger, datacenter IP):**
+- Run alert ingestion.
+- **SKIP § SCRAPING entirely.** Remote environments have no Playwright MCP; WebFetch from datacenter IPs is gated on Rightmove/Zoopla/SpareRoom search pages. Alert ingestion is the only remote input source.
+
+Detect remote mode by the absence of Playwright MCP tools (probe as above and catch the "server not available" error pattern).
 
 ## WHO IS [YOUR_NAME]
 - [YOUR_AGE]yo [YOUR_NATIONALITY] [YOUR_PROFESSION] at [YOUR_EMPLOYER_TYPE]
@@ -299,14 +303,18 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 ## SUCCESS CRITERIA
 
 - Alert emails queried for the target sender domains in the last 2 days (labeled threads excluded via `-label:hunt-processed`)
-- Fully-processed threads labeled `hunt-processed` in Gmail
-- Flats database has new pages for every listing that passed hard filters and survived URL dedup, with `Source` correctly set
-- Meta database: `last_local_run` stamped on local runs; `last_remote_run` stamped on remote runs
-- No listings added that violate hard filters
-- No duplicate URLs in Notion (dedup holds across both ingestion paths)
-- HIGH tier caps respected for size-unknown 1-beds
-- Outreach .txt files saved for HIGH priority (local mode only)
-- Email draft created (local mode also clicks Send; remote mode leaves as draft for the Apps Script auto-sender)
+- Fully-processed alert threads labeled `hunt-processed` in Gmail
+- Playwright MCP availability probed at the start of § SCRAPING. If unavailable, digest records a `⚠️ Scraping skipped (Playwright unavailable)` line.
+- Scraping attempted for every primary portal-area; for each one, digest records one of: (a) new rows added, (b) early-exit after ≥3 consecutive known listings, (c) 3-page cap reached, (d) block/CAPTCHA skip.
+- On Mondays only, secondary portal-areas also scraped.
+- Flats database has new pages for every listing that passed hard filters and survived URL dedup, with `Source=scraped-local` for scraping-origin rows and `Source=email-alert` for alert-origin rows.
+- Dedup-check failures (Notion query errored after 3 retries with exponential backoff) surfaced in the digest under a "Dedup-check failures" section; NO row inserted on fail-closed.
+- Meta database: `last_local_run` stamped on local runs; `last_remote_run` stamped on remote runs.
+- No listings added that violate hard filters.
+- No duplicate URLs in Notion (dedup holds across both ingestion paths; URL column is canonical but NOT uniqueness-enforced by Notion — correctness depends on the pre-insert query succeeding).
+- HIGH tier caps respected for size-unknown 1-beds.
+- Outreach .txt files saved for HIGH priority (local mode only).
+- Email draft created (local mode: Send directly if Playwright navigates to Gmail to click send; remote mode: leave as draft for the Apps Script auto-sender).
 ```
 
 ---

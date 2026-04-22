@@ -42,8 +42,8 @@ Reject outright if any of:
 
 ## SIZE RESOLUTION (priority order)
 
-1. Stated in listing text → use.
-2. Stated on floorplan → extract visually.
+1. Stated in listing text (structured JSON, when sensible — positive number, 10–500 m², not in nonsensical units) → use, set `Size Source=stated-text`.
+2. Stated on floorplan image → extracted via § VISUAL EXTRACTION — FLOORPLAN screenshot during scraping enrichment step 7e. Set `Size Source=floorplan`. This is the most reliable source — floorplan-stated size overrides structured JSON when both are available.
 3. 2-bed + no size → assume ≥60 m², accept, set `Size Source=inferred-2bed`.
 4. 1-bed + no size (no text, no floorplan):
    - INCLUDE but cap tier at MEDIUM
@@ -279,7 +279,7 @@ Paginate to page 2, then page 3, capped at 3 pages total, subject to this early-
 
 - 2-second wait between `mcp__playwright__browser_navigate` calls on the same portal.
 - Portals processed sequentially, not in parallel.
-- Typical scrape runtime: 6–12 minutes. **Hard kill at 25 minutes** of scraping wall-clock — if reached, log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL with whatever was captured. This is an in-progress interrupt only; it never justifies pre-flight skip. Start scraping immediately after the availability probe succeeds.
+- Typical scrape runtime: 15–30 minutes (with visual extraction). **Hard kill at 60 minutes** of scraping wall-clock — if reached, log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL with whatever was captured. This is an in-progress interrupt only; it never justifies pre-flight skip. Start scraping immediately after the availability probe succeeds.
 
 ### Secondary-area cadence
 
@@ -382,6 +382,8 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 - No listings added that violate hard filters.
 - No duplicate URLs in Notion (dedup holds across both ingestion paths; URL column is canonical but NOT uniqueness-enforced by Notion — correctness depends on the pre-insert query succeeding).
 - HIGH tier caps respected for size-unknown 1-beds.
+- For Rightmove/Zoopla scraped listings with floorplan images, `Size Source = floorplan` should appear on the majority of new rows. If consistently low, investigate whether floorplan URL extraction or screenshot reading is failing silently.
+- Visual extraction (floorplan + photos) attempted for every new Rightmove/Zoopla listing that passes cheap hard filters. Digest records count of successful floorplan reads vs. total attempts.
 - Outreach .txt files saved for HIGH priority (local mode only).
 - Email draft created (local mode: Send directly if Playwright navigates to Gmail to click send; remote mode: leave as draft for the Apps Script auto-sender).
 ```

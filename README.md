@@ -59,11 +59,11 @@ london-property-hunt/
 ## Requirements
 
 - **Claude Code** (CLI or desktop app) — [claude.ai/code](https://claude.ai/code)
-- **Claude in Chrome** MCP extension — for browser automation (SpareRoom, OpenRent, etc.)
-- **Gmail MCP connector** — for draft creation and sending
-- **Notion MCP connector** — *flats variant only* — for the Notion-based tracker (full CRUD)
-- **Python 3 + openpyxl** — *rooms variant only* — for xlsx spreadsheet updates (`pip install openpyxl`)
-- A Gmail / Google account you can grant MCP access to
+- **Playwright MCP** — *flats variant only* — for residential-IP browser scraping. Install with `claude mcp add --scope user playwright -- npx '@playwright/mcp@latest'`. Downloads its own Chromium on first use (~150MB). Runs headless — no user-facing browser window required.
+- **Gmail MCP connector** — for inbox reading (alert ingestion), draft creation, and `hunt-processed` labeling.
+- **Notion MCP connector** — *flats variant only* — for the Notion-based tracker (full CRUD).
+- **Python 3 + openpyxl** — *rooms variant only* — for xlsx spreadsheet updates (`pip install openpyxl`).
+- A Gmail / Google account you can grant MCP access to.
 
 ---
 
@@ -238,5 +238,5 @@ See [case-study.md](case-study.md) for a full write-up: how this was built, what
 
 ---
 
-*Built with Claude Code + Claude in Chrome + Gmail MCP*
+*Built with Claude Code + Playwright MCP + Gmail MCP*
 *Generated: April 2026*

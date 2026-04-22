@@ -8,6 +8,17 @@ All four saved searches should match the criteria from your `config.md`:
 - Primary + secondary area list (set as broadly as the portal's filter allows)
 - Unfurnished or part-furnished preferred (where filter supports it)
 
+## What to expect per portal
+
+Not every portal's alert email is ingestible by the skill. Based on 6 days of observation (2026-04-16 to 2026-04-22):
+
+- **Rightmove** — ✅ Alerts work. Plaintext contains tracker-wrapped `clicks.rightmove.co.uk/f/a/<token>` URLs which resolve to canonical `rightmove.co.uk/properties/<id>` via HTTP redirect. Skill follows the redirect with `curl -sIL` and extracts the canonical URL.
+- **Zoopla** — ❌ Alerts NOT ingestible. Both instant and daily-digest plaintext templates contain only `zoopla.co.uk?utm_campaign=...` homepage roots. Per-listing URLs live in the HTML part, which the Gmail MCP does not expose. **Zoopla is covered by scraping instead.** Keep saved searches on for human inbox triage if you like.
+- **SpareRoom** — ⚠️ Saved-search alerts may be paid-plan only; instant alerts have not delivered in testing. **SpareRoom is covered by scraping.**
+- **OpenRent** — ⚠️ Saved-search alerts have not delivered in testing (may be a delivery or spam-filter issue). **OpenRent is covered by scraping** — and as the only non-gated portal for WebFetch, the remote trigger can cover OpenRent listings too if alerts ever start flowing.
+
+Bottom line: alerts are a *bonus* freshness channel. Scraping (Playwright MCP) is the authoritative source for inventory. You still benefit from having portal alerts on — they land in your inbox before the next scrape, so you have the option to act within minutes on a hot listing that the scheduled scrape would have picked up the next morning.
+
 ## Rightmove
 
 1. Go to [rightmove.co.uk](https://www.rightmove.co.uk/) and sign in (create account on rvonaar@gmail.com if needed).

@@ -17,7 +17,7 @@ Two ingestion paths — alert ingestion (§ALERT INGESTION) always runs first in
 
 **Local mode (laptop cron, residential IP):**
 - Run alert ingestion.
-- Probe Playwright via `mcp__playwright__navigate` to `https://example.com`. If it responds within 30s with no error, run § SCRAPING for all 4 portals. If it fails, log "Playwright unavailable — scraping skipped" and continue.
+- Probe Playwright via `mcp__playwright__browser_navigate` to `https://example.com`. If it responds within 30s with no error, run § SCRAPING for all 4 portals. If it fails, log "Playwright unavailable — scraping skipped" and continue.
 
 **Remote mode (Anthropic-hosted trigger, datacenter IP):**
 - Run alert ingestion.
@@ -147,12 +147,12 @@ If Playwright is available, this section **MUST** run to completion for all 4 po
 
 Only legitimate reasons to skip or abort scraping:
 - Playwright unavailable (probe below fails).
-- A single `mcp__playwright__navigate` exceeds 30s timeout → skip that portal-area only, continue with the next.
+- A single `mcp__playwright__browser_navigate` exceeds 30s timeout → skip that portal-area only, continue with the next.
 - Total scraping wall-clock exceeds 25 min → mid-run kill (log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL). This is a hard stop, **not** a pre-flight deferral.
 
 ### Playwright availability probe
 
-At the start of this section, probe Playwright by calling `mcp__playwright__navigate` with URL `https://example.com`. If it succeeds (any title returned), Playwright is healthy — proceed with the full scrape as specified below. If it throws or times out within 30s, mark the run as "scraping skipped (Playwright unavailable)" and go straight to the TRACKER + EMAIL steps with only the alert-ingestion results.
+At the start of this section, probe Playwright by calling `mcp__playwright__browser_navigate` with URL `https://example.com`. If it succeeds (any title returned), Playwright is healthy — proceed with the full scrape as specified below. If it throws or times out within 30s, mark the run as "scraping skipped (Playwright unavailable)" and go straight to the TRACKER + EMAIL steps with only the alert-ingestion results.
 
 ### Portal search URLs (primary areas)
 
@@ -179,9 +179,9 @@ Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slug
 
 ### Scraping loop (per portal-area search URL)
 
-1. Call `mcp__playwright__navigate` with the search URL.
-2. Call `mcp__playwright__snapshot` to get the rendered DOM tree.
-3. Detect block page: if the `mcp__playwright__snapshot` response's title or any `h1`/`h2`/`h3` heading text matches `/Access denied|Just a moment|Something went wrong|unusual activity|403 Forbidden|Please verify you are human|Too many requests|Rate limit exceeded|Access to .* was denied/i`, log "Block detected on {portal}/{area}" to the digest, mark this portal-area as blocked, and skip to the next portal-area. No retry. If you observe a new block page pattern in practice (e.g. a portal rolls out a new challenge), expand this regex in `skill-flats.md`.
+1. Call `mcp__playwright__browser_navigate` with the search URL.
+2. Call `mcp__playwright__browser_snapshot` to get the rendered DOM tree.
+3. Detect block page: if the `mcp__playwright__browser_snapshot` response's title or any `h1`/`h2`/`h3` heading text matches `/Access denied|Just a moment|Something went wrong|unusual activity|403 Forbidden|Please verify you are human|Too many requests|Rate limit exceeded|Access to .* was denied/i`, log "Block detected on {portal}/{area}" to the digest, mark this portal-area as blocked, and skip to the next portal-area. No retry. If you observe a new block page pattern in practice (e.g. a portal rolls out a new challenge), expand this regex in `skill-flats.md`.
 4. Otherwise, extract listing URLs from the DOM by matching portal-specific patterns:
    - Rightmove: anchor `href` matching `/properties/\d+` → full URL `https://www.rightmove.co.uk/properties/<id>`.
    - Zoopla: anchor `href` matching `/to-rent/details/\d+/` → full URL `https://www.zoopla.co.uk/to-rent/details/<id>/`.
@@ -196,11 +196,11 @@ Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slug
    - If still failing after 3 retries, **skip this URL** (do NOT insert) and append a line to the digest's "Dedup-check failures" section.
    - Rationale: Notion `url`-type properties are NOT uniqueness-enforced, so inserting without a successful dedup check can create duplicate rows.
 7. **Enrichment:**
-   - Call `mcp__playwright__navigate` with the listing URL.
-   - Call `mcp__playwright__evaluate` with a portal-specific snippet that pulls title / price / beds / size / floor / furnished / available-from / description text / amenity hints. Examples:
+   - Call `mcp__playwright__browser_navigate` with the listing URL.
+   - Call `mcp__playwright__browser_evaluate` with a portal-specific snippet that pulls title / price / beds / size / floor / furnished / available-from / description text / amenity hints. Examples:
      - Rightmove: `() => window.PAGE_MODEL || document.querySelector('script#__NEXT_DATA__')?.textContent` then parse JSON.
      - Zoopla: `() => window.__PRELOADED_STATE__ || document.querySelector('script#__NEXT_DATA__')?.textContent`.
-     - SpareRoom / OpenRent: no reliable global state object. Inspect the rendered page via `mcp__playwright__snapshot` and read visible text for price / beds / size / address / furnished / available-from, plus `<meta property="og:title">`, `<meta name="description">`, and any JSON-LD `<script type="application/ld+json">` block. If fields can't be confidently extracted, insert a minimal row (Title + URL + Platform + Source=`scraped-local` + Needs-verify=`extraction incomplete`) rather than dropping the listing.
+     - SpareRoom / OpenRent: no reliable global state object. Inspect the rendered page via `mcp__playwright__browser_snapshot` and read visible text for price / beds / size / address / furnished / available-from, plus `<meta property="og:title">`, `<meta name="description">`, and any JSON-LD `<script type="application/ld+json">` block. If fields can't be confidently extracted, insert a minimal row (Title + URL + Platform + Source=`scraped-local` + Needs-verify=`extraction incomplete`) rather than dropping the listing.
    - Apply HARD FILTERS (beds in 1–2, rent ≤ [FLAT_BUDGET_HARD_CAP], area in primary ∪ secondary, stated size ≥ [FLAT_SIZE_FLOOR_M2] or size-inferred per § SIZE RESOLUTION, not obviously dated). If any filter fails, skip — do NOT create a Notion row.
    - Score per § SCORING. Call `mcp__claude_ai_Notion__notion-create-pages` with parent `{type: "data_source_id", data_source_id: "[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]"}` and properties: Title, URL, Platform, Found On (today's date, Europe/Zurich), Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status=`NEW`, Reason, Needs-verify, Source=`scraped-local`. Do NOT set Human Tier or Human Rationale.
    - If listing-page navigate times out or the portal returns an empty/error page for this specific listing, create a minimal Notion row with Title + URL + Platform + Source=`scraped-local` + Needs-verify=`listing page unreachable`, and leave Score + Tier blank.
@@ -217,7 +217,7 @@ Paginate to page 2, then page 3, capped at 3 pages total, subject to this early-
 
 ### Rate limiting
 
-- 2-second wait between `mcp__playwright__navigate` calls on the same portal.
+- 2-second wait between `mcp__playwright__browser_navigate` calls on the same portal.
 - Portals processed sequentially, not in parallel.
 - Typical scrape runtime: 6–12 minutes. **Hard kill at 25 minutes** of scraping wall-clock — if reached, log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL with whatever was captured. This is an in-progress interrupt only; it never justifies pre-flight skip. Start scraping immediately after the availability probe succeeds.
 

@@ -114,8 +114,9 @@ For each portal × primary area:
 2. `playwright__snapshot` to get the rendered DOM tree.
 3. Extract listing URLs via pattern match on the DOM (portal-specific selectors documented in the skill).
 4. For each URL, query Notion Flats for `URL == candidate`. If match, it's already in the tracker — mark it as a "dedup hit".
-5. **Early-exit on page 1:** if ≥1 dedup hit appears on page 1, the tracker is already ahead of this portal-area. Stop paginating for this portal-area; move to the next.
-6. **Continue to page 2 only if:** page 1 was all-new (no dedup hits). Cap at 3 pages per portal-area (prevents runaway pagination on new-run first day).
+5. **Early-exit requires ≥3 consecutive known listings in newest-first order**, or hitting the 3-page cap (whichever comes first). A single dedup hit mid-page does NOT stop pagination, because mixed ingestion states (an alert may have inserted one listing while peers on the next page are still untracked; a prior scrape may have aborted after CAPTCHA; a laptop-off streak may have left alerts-only coverage with scrape-only listings still on page 2/3) can produce isolated known entries amid new ones.
+6. **Per-listing processing is independent of pagination.** Every URL on every visited page is dedup-checked + enriched + scored regardless of the exit condition. Early-exit only determines whether we load the next page, not whether we process the current one.
+7. **Cap at 3 pages per portal-area** (prevents runaway pagination on new-run first day or after a long outage).
 
 ### 6.3 Listing-page enrichment
 
@@ -159,6 +160,8 @@ The `hunt-processed` Gmail label scheme is preserved — label tools are availab
 ## 8. Notion schema — no change
 
 All 24 properties from the 2026-04-21 spec plus Human Tier / Human Rationale remain. `Source` enum already includes `scraped-local` as an option; this spec just makes that value the most common one going forward.
+
+**Dedup invariant:** The URL column is the canonical dedup key, but Notion's `url`-type property **does NOT enforce uniqueness at the database level** — it's just a typed string. Dedup correctness therefore relies entirely on the pre-insert query succeeding. See §12 for the fail-closed retry-and-skip behavior on query error.
 
 ## 9. Skill-flats.md changes
 
@@ -221,7 +224,7 @@ Update `trig_01St8iTA4T9nkW5iRFbRMp7a` prompt to:
 | Portal returns CAPTCHA / block page | Per §6.5: log, skip that portal-area, continue. |
 | Navigate times out (>30s) | Same as block: log, skip, continue. |
 | Listing page extraction fails for one URL | Create a minimal Notion row with the URL + title and `Needs-verify: extraction failed`. Don't block the rest of the run. |
-| Notion dedup query errors | Fall back to "insert anyway; Notion's URL-unique constraint will catch duplicates at the DB level". |
+| Notion dedup query errors | **Fail closed.** Notion does NOT enforce uniqueness on `url`-type properties (unlike a SQL UNIQUE index), so dedup relies entirely on the pre-insert query succeeding. On query error: retry 3× with exponential backoff (1s, 3s, 9s). If still failing, **skip insertion** for this candidate URL and log the skip to the digest email under a "Dedup-check failures" section. Never insert without a successful dedup check. |
 | Alert ingestion fails in Step 1 | Log warning, proceed to scraping. |
 
 ## 13. Rollout plan

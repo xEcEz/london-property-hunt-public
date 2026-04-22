@@ -217,6 +217,54 @@ Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slug
    - Apply HARD FILTERS (beds in 1–2, rent ≤ [FLAT_BUDGET_HARD_CAP], area in primary ∪ secondary, stated size ≥ [FLAT_SIZE_FLOOR_M2] or size-inferred per § SIZE RESOLUTION). If any filter fails, skip — do NOT create a Notion row.
    - Score and insert as per step 7i above.
 
+### VISUAL EXTRACTION — FLOORPLAN
+
+This section is called from enrichment step 7e. It runs for Rightmove and Zoopla listings only, when the structured JSON contains a floorplan image URL.
+
+1. Extract the floorplan image URL:
+   - **Rightmove:** `_floorplanUrl` from the evaluate result (populated from `PAGE_MODEL.propertyData.floorplans[0].url`).
+   - **Zoopla:** locate the floorplan URL in the evaluate result. Look for keys named `floorPlanImages`, `floorPlan`, `floorplan`, or `floorPlanImage` in the listing data object. Take the first URL found.
+   - If no floorplan URL is found, skip this section — continue to step 7f (photo pass).
+
+2. Call `mcp__playwright__browser_navigate` with the floorplan image URL. Timeout: 15 seconds. If navigation fails or times out, log "Floorplan navigation failed for {listing URL}" and skip to step 7f.
+
+3. Call `mcp__playwright__browser_take_screenshot`. If the screenshot fails, log and skip to step 7f.
+
+4. Examine the screenshot and extract:
+   - **Total floor area:** look for text at the bottom or top of the floorplan image, typically "Approx. Gross Internal Floor Area NNN sq. ft / NN.NN sq. m" or just "NNN sq ft" or "NN m²". If the area is in sq ft only, convert: `m² = sq_ft × 0.0929`. Round to 1 decimal place.
+   - **Floor level:** look for text like "Fourth Floor", "Ground Floor", "First Floor", "Basement", "Lower Ground Floor" printed on or near the plan. Map to the Floor enum:
+     - "Top" — only if the text explicitly says "top floor", "penthouse", or "uppermost", OR if both the current floor number and total building floors are known and they match.
+     - "Ground" — if it says "Ground Floor" or "Lower Ground Floor".
+     - "Mid" — all other numbered floors.
+     - If the floor number is ≥3 but you cannot confirm it's the top floor, set Floor="Mid" and append `floor` to the Needs-verify field.
+   - **Bathtub hint:** look for a rectangular bath shape in the bathroom area of the plan (distinct from the smaller square/quadrant shower cubicle shape). Set Bathtub="Yes" if clearly visible, "No" if the bathroom only shows a shower, "Unknown" if unclear.
+
+5. Return the extracted values (size_m2, floor, bathtub) to the merge step (7g).
+
+### VISUAL EXTRACTION — PHOTOS
+
+This section is called from enrichment step 7f. It runs for Rightmove and Zoopla listings only, when the structured JSON contains listing photo URLs.
+
+1. Select up to 3 photos from the listing's photo array:
+   - **Caption-based selection (preferred):** scan the `_photos` array (Rightmove) or equivalent Zoopla photo array for entries whose `caption` (case-insensitive) contains any of: `bathroom`, `bath`, `shower room`, `kitchen`, `living`, `bedroom`, `reception`, `lounge`. Select photos in this priority order:
+     a. First photo with a bathroom/bath/shower caption (highest value — bathtub detection).
+     b. First photo with a living/reception/lounge/bedroom caption (wood floor, light).
+     c. First photo with a kitchen caption (renovation state).
+   - **Index-based fallback:** if fewer than 3 photos matched by caption, fill remaining slots from indices 0, 3, 6 of the photo array (spread across the gallery). Skip any index that was already selected by caption or that exceeds the array length.
+   - Hard cap: 3 photos total. If the listing has fewer than 3 photos, take all available.
+
+2. For each selected photo:
+   a. Call `mcp__playwright__browser_navigate` with the photo URL. Timeout: 15 seconds. If navigation fails or times out, skip this photo — continue to the next.
+   b. Call `mcp__playwright__browser_take_screenshot`. If the screenshot fails, skip this photo.
+   c. Examine the screenshot and extract the relevant fields based on what the photo shows:
+      - **Bathroom photo:** Bathtub — "Yes" if a rectangular tub is visible (freestanding, built-in, or shower-over-bath), "No" if only a shower stall/cubicle is visible, "Unknown" if unclear. Also note Light and New/Renovated if assessable.
+      - **Room photo (living/bedroom/reception):** Wood floor — "Yes" if hardwood, parquet, or engineered-wood flooring is visible (laminate that looks like wood counts as "Yes"), "No" if carpet, tile, or vinyl is visible, "Unknown" if unclear. Light — "Good" if large windows with visible daylight, "Poor" if small/few windows or dark, "Avg" if mixed, "Unknown" if photo doesn't show windows. New/Renovated — "Yes" if modern fittings, contemporary style, fresh paint, "No" if dated fixtures/wallpaper/worn surfaces, "Unknown" if unclear.
+      - **Kitchen photo:** New/Renovated — "Yes" if modern kitchen with contemporary units/appliances, "No" if dated, "Unknown" if unclear.
+
+3. Consolidate across all photos: for each field (bathtub, wood floor, light, new/renovated), if any photo yielded a definitive "Yes" or "No", use that. If multiple photos disagree, prefer "Yes" over "No" (the negative photo might show a different room). If all photos yielded "Unknown" for a field, keep "Unknown".
+
+4. Return the consolidated values (bathtub, wood_floor, light, new_renovated) to the merge step (7g).
+
 ### Pagination cutoff (per portal-area)
 
 Paginate to page 2, then page 3, capped at 3 pages total, subject to this early-exit rule:

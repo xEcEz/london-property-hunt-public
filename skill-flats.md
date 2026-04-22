@@ -80,9 +80,9 @@ Read portal saved-search alert emails from Raphael's Gmail and convert them into
 
 Call `mcp__claude_ai_Gmail__search_threads` with:
 
-(from:(rightmove.co.uk) OR from:(zoopla.co.uk) OR from:(spareroom.co.uk) OR from:(openrent.co.uk) OR from:(openrent.com)) AND newer_than:2d
+(from:(rightmove.co.uk) OR from:(zoopla.co.uk) OR from:(spareroom.co.uk) OR from:(openrent.co.uk) OR from:(openrent.com)) AND newer_than:2d AND -label:hunt-processed
 
-Rationale: sender-domain substring filter catches portal transactional mail including subdomains (e.g. `news@email.zoopla.co.uk`, `property-alerts@rightmove.co.uk`); `newer_than:2d` catches backlog after weekend laptop-off periods. Deduplication across runs is handled exclusively by the Notion URL column — threads may be re-seen on multiple runs but already-inserted URLs are skipped in O(1).
+Rationale: sender-domain substring filter catches portal transactional mail including subdomains (e.g. `news@email.zoopla.co.uk`, `property-alerts@rightmove.co.uk`); `-label:hunt-processed` skips threads already handled; `newer_than:2d` is a safety net in case labeling fails. The Notion URL column is still the canonical dedup key — labels are just an efficiency optimization.
 
 ### For each matched thread
 
@@ -116,17 +116,20 @@ Rationale: sender-domain substring filter catches portal transactional mail incl
 4. If the listing passes hard filters and page fetch succeeded → extract all available signals per § SCORING, score, create Notion row with `Source=email-alert`.
 5. If page fetch failed but the alert email content alone did not trigger a hard-filter rejection → create a minimal Notion row using alert-email data (title, price, beds, URL). Set `Size Source=unknown`, `Needs-verify: listing page unreachable`, `Source=email-alert`. Skip scoring (leave `Score` and `Tier` empty).
 
-### Deduplication across runs
+### Label-after-handling
 
-Gmail MCP does not expose `label_thread` on the current connector, so we do not label processed threads. Dedup is handled entirely by the Notion URL column:
+After a thread is fully processed (all URLs extracted, dedup-checked, rows inserted or rejected), apply the Gmail label `hunt-processed` via `mcp__claude_ai_Gmail__label_thread`. This keeps the primary Gmail query fast by excluding already-handled threads. On first run, create the label via `mcp__claude_ai_Gmail__create_label` if `mcp__claude_ai_Gmail__list_labels` doesn't return it.
 
-- Every extracted URL is checked against Notion Flats before any listing page is fetched.
-- Already-present URLs are skipped in O(1) — no network cost.
-- Threads within the `newer_than:2d` window are re-seen on every run; that's expected and cheap.
+Labeling is non-fatal — if it errors (e.g. transient scope issue), the Notion URL column still prevents duplicate rows on the next run. The worst case is re-processing the same thread once, which is cheap.
 
 ### When there are no URLs to extract
 
-If an alert email has zero extractable URLs (e.g. a marketing template, or a template change where our regex misses the new URL shape), log the skip but don't fail. A future run may retry if the regex is updated or the email content changes.
+If an alert email has zero extractable URLs (e.g. a marketing template, or a template change where our regex misses the new URL shape), do NOT label it `hunt-processed`. A future run may retry once we've fixed the parser. Log the skip but don't fail.
+
+### Deduplication across runs
+
+- **Primary:** Gmail `hunt-processed` label — excludes handled threads from the main query.
+- **Secondary:** Notion URL column — every extracted URL is O(1) checked before any listing page is fetched. Catches cases where a listing was seen on a prior run via a different path (scraping vs. alert, or an email we had to re-process after fixing the parser).
 
 ## SCRAPING (local mode only)
 
@@ -225,7 +228,8 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 
 ## SUCCESS CRITERIA
 
-- Alert emails queried for the target sender domains in the last 2 days
+- Alert emails queried for the target sender domains in the last 2 days (labeled threads excluded via `-label:hunt-processed`)
+- Fully-processed threads labeled `hunt-processed` in Gmail
 - Flats database has new pages for every listing that passed hard filters and survived URL dedup, with `Source` correctly set
 - Meta database: `last_local_run` stamped on local runs; `last_remote_run` stamped on remote runs
 - No listings added that violate hard filters

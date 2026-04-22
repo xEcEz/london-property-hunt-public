@@ -141,9 +141,18 @@ Drives a real Chromium from the laptop's residential IP via Playwright MCP. Bypa
 
 **Skip this section entirely in remote WebFetch-only mode** — the remote trigger has no Playwright MCP available. Alert ingestion is the only remote input.
 
+### Mandatory when Playwright is healthy
+
+If Playwright is available, this section **MUST** run to completion for all 4 portals × 8 primary areas (plus secondary areas on Mondays). Scraping is not optional based on "alert-ingestion already produced rows" or "projected runtime is long" or "alert/scrape overlap looks high". The whole point of scraping is to cover Zoopla / SpareRoom / OpenRent that alerts don't see. Overlap with alert-sourced Rightmove rows is EXPECTED and handled by the O(1) Notion URL dedup — it is not a reason to skip.
+
+Only legitimate reasons to skip or abort scraping:
+- Playwright unavailable (probe below fails).
+- A single `mcp__playwright__navigate` exceeds 30s timeout → skip that portal-area only, continue with the next.
+- Total scraping wall-clock exceeds 25 min → mid-run kill (log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL). This is a hard stop, **not** a pre-flight deferral.
+
 ### Playwright availability probe
 
-At the start of this section, probe Playwright by calling `mcp__playwright__navigate` with URL `https://example.com`. If it succeeds (any title returned), Playwright is healthy — proceed. If it throws or times out within 30s, mark the run as "scraping skipped (Playwright unavailable)" and go straight to the TRACKER + EMAIL steps with only the alert-ingestion results.
+At the start of this section, probe Playwright by calling `mcp__playwright__navigate` with URL `https://example.com`. If it succeeds (any title returned), Playwright is healthy — proceed with the full scrape as specified below. If it throws or times out within 30s, mark the run as "scraping skipped (Playwright unavailable)" and go straight to the TRACKER + EMAIL steps with only the alert-ingestion results.
 
 ### Portal search URLs (primary areas)
 
@@ -210,7 +219,7 @@ Paginate to page 2, then page 3, capped at 3 pages total, subject to this early-
 
 - 2-second wait between `mcp__playwright__navigate` calls on the same portal.
 - Portals processed sequentially, not in parallel.
-- Target total scrape runtime: 6–12 minutes typical. If a run exceeds 25 minutes, log and exit to avoid blocking downstream steps.
+- Typical scrape runtime: 6–12 minutes. **Hard kill at 25 minutes** of scraping wall-clock — if reached, log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL with whatever was captured. This is an in-progress interrupt only; it never justifies pre-flight skip. Start scraping immediately after the availability probe succeeds.
 
 ### Secondary-area cadence
 

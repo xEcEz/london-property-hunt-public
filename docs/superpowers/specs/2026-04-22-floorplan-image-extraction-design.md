@@ -27,13 +27,15 @@ New flow:
 
 1. `browser_navigate` to listing URL
 2. `browser_evaluate` to extract structured JSON **+ floorplan image URL(s) + listing photo URLs with captions**
-3. **Floorplan pass** (if floorplan URL exists): `browser_navigate` to image URL → `browser_take_screenshot` → extract size (m²), floor level, bathtub hint from architectural drawing
-4. **Photo pass** (if listing photos exist): screenshot a selection of up to 3 photos → extract bathtub, wood floor, light, renovation state
-5. **Merge** visual data into listing data (see § 5 Merge Priority)
-6. Apply hard filters (now using visually-enriched data)
-7. Score + insert into Notion
+3. **Cheap hard filters on structured data:** reject immediately on beds outside 1–2, rent > hard cap, area not in primary ∪ secondary. These filters use only structured JSON and cost nothing. If any fails, skip this listing — no visual extraction.
+4. **Size-gate check:** if structured size is present and sensible (see § 5.1) AND it's below the size floor, reject immediately — no visual extraction needed.
+5. **Floorplan pass** (if floorplan URL exists): `browser_navigate` to image URL → `browser_take_screenshot` → extract size (m²), floor level, bathtub hint from architectural drawing
+6. **Photo pass** (if listing photos exist): screenshot a selection of up to 3 photos → extract bathtub, wood floor, light, renovation state
+7. **Merge** visual data into listing data (see § 5 Merge Priority)
+8. **Size hard filter (post-visual):** if the merged size (from floorplan or inference) is below the size floor, reject. This catches listings where structured data had no size but the floorplan reveals it's too small.
+9. Score + insert into Notion
 
-Steps 3–4 are skipped entirely for SpareRoom/OpenRent listings. For Rightmove/Zoopla, each step is independently skippable if no URLs are found or if navigation fails.
+Steps 5–6 are skipped entirely for SpareRoom/OpenRent listings. For Rightmove/Zoopla, each step is independently skippable if no URLs are found or if navigation fails. Critically, steps 5–6 are also skipped for listings already rejected by the cheap filters in step 3–4 — visual extraction only runs on listings that survive cheap structured-data checks.
 
 ## 3. Photo Selection Strategy
 
@@ -62,7 +64,7 @@ Hard cap: **1 floorplan + 3 listing photos = 4 screenshots max** per listing. ~1
 | Field | What to look for | Example |
 |-------|-----------------|---------|
 | **Total size** | Text like "Approx. Gross Internal Floor Area 759 sq. ft / 70.50 sq. m" at bottom of plan. May be sq ft only — convert at 1 sq ft = 0.0929 m². | 70.50 m² |
-| **Floor level** | Text like "Fourth Floor", "Ground Floor", "First Floor" printed on or below the plan. | Fourth Floor → map using total-floors if known from listing; otherwise floors 4+ default to "Top", floor 1 = "Mid", floor 0/G = "Ground". |
+| **Floor level** | Text like "Fourth Floor", "Ground Floor", "First Floor" printed on or below the plan. | Only set "Top" when the source explicitly says top/penthouse/uppermost or when both current floor and total floors are known and match (e.g. "Fourth Floor" of a 4-story building). Otherwise: Ground/Lower Ground = "Ground", all other numbered floors = "Mid". Add `Needs-verify: floor` when the floor number is high (3+) but top-floor status can't be confirmed. |
 | **Bathtub hint** | Rectangular bath shape visible in the floorplan bathroom layout (distinct from shower cubicle shape). | Yes/No/Unknown |
 
 ### 4.2 From Listing Photos
@@ -91,7 +93,7 @@ Highest-priority source wins:
 - Visual evidence **overrides** "Unknown" from structured data.
 - Visual evidence **never downgrades** a "Yes" to "No" — if JSON says bathtub=Yes but photos don't show one, keep "Yes" (the bathtub might not be photographed).
 - If both floorplan and photos provide a signal (e.g. both show bathtub), either "Yes" wins.
-- Floor level: floorplan text (e.g. "Fourth Floor") overrides vague JSON (e.g. no floor info). Map to existing enum: "Top" (highest floor in building), "Mid", "Ground".
+- Floor level: floorplan text (e.g. "Fourth Floor") overrides vague JSON (e.g. no floor info). Map to existing enum per § 4.1: "Top" only with explicit evidence (top/penthouse/total-floors match), "Ground" for ground/lower-ground, "Mid" for everything else. High numbered floors without top-floor confirmation get `Needs-verify: floor`.
 
 ## 6. Error Handling
 

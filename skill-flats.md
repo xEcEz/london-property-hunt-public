@@ -195,15 +195,27 @@ Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slug
    - If the MCP call errors (timeout, 5xx, transient network), retry up to 3× with exponential backoff at 1s, 3s, 9s.
    - If still failing after 3 retries, **skip this URL** (do NOT insert) and append a line to the digest's "Dedup-check failures" section.
    - Rationale: Notion `url`-type properties are NOT uniqueness-enforced, so inserting without a successful dedup check can create duplicate rows.
-7. **Enrichment:**
-   - Call `mcp__playwright__browser_navigate` with the listing URL.
-   - Call `mcp__playwright__browser_evaluate` with a portal-specific snippet that pulls title / price / beds / size / floor / furnished / available-from / description text / amenity hints. Examples:
-     - Rightmove: `() => window.PAGE_MODEL || document.querySelector('script#__NEXT_DATA__')?.textContent` then parse JSON.
-     - Zoopla: `() => window.__PRELOADED_STATE__ || document.querySelector('script#__NEXT_DATA__')?.textContent`.
-     - SpareRoom / OpenRent: no reliable global state object. Inspect the rendered page via `mcp__playwright__browser_snapshot` and read visible text for price / beds / size / address / furnished / available-from, plus `<meta property="og:title">`, `<meta name="description">`, and any JSON-LD `<script type="application/ld+json">` block. If fields can't be confidently extracted, insert a minimal row (Title + URL + Platform + Source=`scraped-local` + Needs-verify=`extraction incomplete`) rather than dropping the listing.
-   - Apply HARD FILTERS (beds in 1–2, rent ≤ [FLAT_BUDGET_HARD_CAP], area in primary ∪ secondary, stated size ≥ [FLAT_SIZE_FLOOR_M2] or size-inferred per § SIZE RESOLUTION, not obviously dated). If any filter fails, skip — do NOT create a Notion row.
-   - Score per § SCORING. Call `mcp__claude_ai_Notion__notion-create-pages` with parent `{type: "data_source_id", data_source_id: "[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]"}` and properties: Title, URL, Platform, Found On (today's date, Europe/Zurich), Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status=`NEW`, Reason, Needs-verify, Source=`scraped-local`. Do NOT set Human Tier or Human Rationale.
+7. **Enrichment (Rightmove / Zoopla):**
+   a. Call `mcp__playwright__browser_navigate` with the listing URL.
+   b. Call `mcp__playwright__browser_evaluate` with a portal-specific snippet that pulls title / price / beds / size / floor / furnished / available-from / description text / amenity hints, **plus floorplan image URL(s) and listing photo URLs with captions**. Examples:
+      - Rightmove: `() => { const m = window.PAGE_MODEL; if (!m) return null; const p = m.propertyData || {}; return { ...p, _floorplanUrl: (p.floorplans || [])[0]?.url || null, _photos: (p.images || []).map(i => ({ url: i.url, caption: i.caption })) }; }` then parse the result.
+      - Zoopla: `() => { const d = window.__PRELOADED_STATE__ || JSON.parse(document.querySelector('script#__NEXT_DATA__')?.textContent || '{}'); return d; }` then locate the listing object, floorplan URL (path varies — look for a `floorPlanImages`, `floorPlan`, `floorplan`, or `floorPlanImage` key in the listing data), and photo array.
+   c. **Cheap hard filters (structured data only):** reject immediately if beds outside 1–2, or rent > [FLAT_BUDGET_HARD_CAP], or area not in primary ∪ secondary. These use only structured JSON. If any fails → skip this listing entirely, no visual extraction.
+   d. **Size-gate check:** if the structured JSON provides a sensible size (positive number in m² or sq ft, between 10 m² and 500 m², not in nonsensical units like hectares) AND that size is below [FLAT_SIZE_FLOOR_M2] → reject immediately, no visual extraction.
+   e. **Floorplan pass (Rightmove / Zoopla only, if floorplan URL exists):** see § VISUAL EXTRACTION — FLOORPLAN below.
+   f. **Photo pass (Rightmove / Zoopla only, if listing photos exist):** see § VISUAL EXTRACTION — PHOTOS below.
+   g. **Merge visual data** into the listing record. Priority rules:
+      - **Size:** floorplan-stated size wins (set `Size Source=floorplan`). If no floorplan size, use sensible structured JSON size (set `Size Source=stated-text`). Otherwise fall back to § SIZE RESOLUTION inference rules.
+      - **Boolean/enum fields** (bathtub, wood floor, light, new/renovated, floor): visual evidence overrides "Unknown" from structured data. Visual evidence never downgrades a "Yes" to "No" (the feature might not be photographed). If both floorplan and photos provide a signal, "Yes" wins.
+      - **Floor level:** floorplan text overrides vague JSON. Only set "Top" when the source explicitly says top/penthouse/uppermost, or when both current floor and total floors are known and match. Ground/Lower Ground = "Ground". All other numbered floors = "Mid". Add `Needs-verify: floor` when the floor number is ≥3 but top-floor status can't be confirmed.
+   h. **Post-visual size filter:** if the merged size (from floorplan, structured data, or inference) is below [FLAT_SIZE_FLOOR_M2] → reject. Do NOT create a Notion row.
+   i. Score per § SCORING. Call `mcp__claude_ai_Notion__notion-create-pages` with parent `{type: "data_source_id", data_source_id: "[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]"}` and properties: Title, URL, Platform, Found On (today's date, Europe/Zurich), Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status=`NEW`, Reason, Needs-verify, Source=`scraped-local`. Do NOT set Human Tier or Human Rationale.
    - If listing-page navigate times out or the portal returns an empty/error page for this specific listing, create a minimal Notion row with Title + URL + Platform + Source=`scraped-local` + Needs-verify=`listing page unreachable`, and leave Score + Tier blank.
+
+   **Enrichment (SpareRoom / OpenRent):**
+   - No floorplan or photo visual extraction. Use the existing SpareRoom/OpenRent enrichment approach: inspect the rendered page via `mcp__playwright__browser_snapshot` and read visible text for price / beds / size / address / furnished / available-from, plus `<meta property="og:title">`, `<meta name="description">`, and any JSON-LD `<script type="application/ld+json">` block. If fields can't be confidently extracted, insert a minimal row (Title + URL + Platform + Source=`scraped-local` + Needs-verify=`extraction incomplete`) rather than dropping the listing.
+   - Apply HARD FILTERS (beds in 1–2, rent ≤ [FLAT_BUDGET_HARD_CAP], area in primary ∪ secondary, stated size ≥ [FLAT_SIZE_FLOOR_M2] or size-inferred per § SIZE RESOLUTION). If any filter fails, skip — do NOT create a Notion row.
+   - Score and insert as per step 7i above.
 
 ### Pagination cutoff (per portal-area)
 

@@ -76,6 +76,29 @@ Tiers:
 
 **Cap:** size-unknown 1-beds (rule 4 above) → tier cannot exceed MEDIUM even if score ≥ HIGH threshold.
 
+## INIT — LOAD KNOWN URL SET (runs once, before any ingestion)
+
+**Why this exists:** Notion's `notion-search` MCP tool is semantic, not filter-by-property. Searching by URL value (e.g., `query="https://www.rightmove.co.uk/properties/12345"`) does NOT reliably return the page with that URL property. Per-candidate dedup via `notion-search` is unsafe — every URL would appear "new" and the run would create duplicate rows. This section builds a reliable O(1) in-memory URL set at run start; all downstream dedup checks use it.
+
+**Runs once per run, after MCP availability probes and before any ingestion (alerts or scraping).**
+
+1. Enumerate all pages in the Flats data source by paginating `mcp__claude_ai_Notion__notion-search`. Because empty queries aren't allowed (minLength: 1), use broad queries that cover typical page titles: `"bed"`, `"flat"`. For each query:
+   - Call `mcp__claude_ai_Notion__notion-search` with `query=<term>`, `data_source_url=collection://[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]`, `page_size=25`, `max_highlight_length=0`.
+   - If the response contains `nextPageToken`, repeat with that token until no more pages. Cap at 20 pagination iterations per query as a safety net.
+   - Collect each result's `id` (page UUID).
+2. Union the page UUIDs from all queries into a single unique set. Typical result: 30–200 pages.
+3. For each unique page UUID, call `mcp__claude_ai_Notion__notion-fetch` with the UUID. Read the `userDefined:URL` property from the returned `<properties>` block. Build an in-memory map: `url_string → page_uuid`.
+4. Store the map as the **known URL set** for this run. All dedup checks (alert ingestion step 7.a and scraping step 6) consult this set — no further `notion-search` dedup calls are made.
+
+**Error handling:**
+- If `notion-search` errors on a pagination call: retry up to 3× with exponential backoff (1s, 3s, 9s). If still failing, log "URL set enumeration failed — aborting run" and exit without inserting any rows. Do NOT proceed with unreliable dedup.
+- If `notion-fetch` errors on an individual page: retry once, then skip that page. Log the skip count in the digest. A partial URL set is acceptable as long as <5% of pages fail to fetch; otherwise abort.
+- If the Notion MCP is entirely unavailable: exit immediately with a digest line "⚠️ Notion unavailable — full run aborted".
+
+**Rationale for fail-closed behavior:** duplicate rows pollute the tracker permanently and are costly to clean up. A missed run is recoverable on the next day. Favor correctness.
+
+**In-memory use only:** the URL set is not persisted. Every run rebuilds it from scratch. The data source is the source of truth.
+
 ## ALERT INGESTION (runs first, both local and remote)
 
 Read portal saved-search alert emails from Raphael's Gmail and convert them into Flats rows.
@@ -112,7 +135,7 @@ Rationale: sender-domain substring filter catches portal transactional mail incl
 
 ### For each extracted URL
 
-1. Query Notion Flats data source (id `[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]`) for `URL == <candidate>`. If any match, skip this URL.
+1. Check the candidate URL against the **known URL set** built in § INIT — LOAD KNOWN URL SET. If the URL is in the set, skip this URL (dedup hit). O(1) local lookup — do NOT call `notion-search` for per-URL dedup, it is semantic and unreliable for URL-property matches.
 2. Otherwise fetch the individual listing page:
    - Local mode: Claude-in-Chrome
    - Remote mode: WebFetch
@@ -133,7 +156,7 @@ If an alert email has zero extractable URLs (e.g. a marketing template, or a tem
 ### Deduplication across runs
 
 - **Primary:** Gmail `hunt-processed` label — excludes handled threads from the main query.
-- **Secondary:** Notion URL column — every extracted URL is O(1) checked before any listing page is fetched. Catches cases where a listing was seen on a prior run via a different path (scraping vs. alert, or an email we had to re-process after fixing the parser).
+- **Secondary:** In-memory known URL set built once at run start by § INIT — LOAD KNOWN URL SET. Every extracted URL is checked in O(1) local lookup before any listing page is fetched. Catches cases where a listing was seen on a prior run via a different path (scraping vs. alert, or an email we had to re-process after fixing the parser).
 
 ## SCRAPING (local mode only, Playwright MCP)
 
@@ -143,7 +166,7 @@ Drives a real Chromium from the laptop's residential IP via Playwright MCP. Bypa
 
 ### Mandatory when Playwright is healthy
 
-If Playwright is available, this section **MUST** run to completion for all 4 portals × 8 primary areas (plus secondary areas on Mondays). Scraping is not optional based on "alert-ingestion already produced rows" or "projected runtime is long" or "alert/scrape overlap looks high". The whole point of scraping is to cover Zoopla / SpareRoom / OpenRent that alerts don't see. Overlap with alert-sourced Rightmove rows is EXPECTED and handled by the O(1) Notion URL dedup — it is not a reason to skip.
+If Playwright is available, this section **MUST** run to completion for all 4 portals × 8 primary areas (plus secondary areas on Mondays). Scraping is not optional based on "alert-ingestion already produced rows" or "projected runtime is long" or "alert/scrape overlap looks high". The whole point of scraping is to cover Zoopla / SpareRoom / OpenRent that alerts don't see. Overlap with alert-sourced Rightmove rows is EXPECTED and handled by the O(1) local URL dedup (§ INIT — LOAD KNOWN URL SET) — it is not a reason to skip.
 
 Only legitimate reasons to skip or abort scraping:
 - Playwright unavailable (probe below fails).
@@ -190,11 +213,10 @@ Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slug
 5. Walk the extracted URLs in the order they appeared on the page (newest-first). For each URL:
    a. Dedup check (see step 6 below).
    b. If new → enrich + score + insert (see step 7 below).
-6. **Dedup check (fail-closed):**
-   - Call `mcp__claude_ai_Notion__notion-search` with `query=<URL>`, `data_source_url=collection://[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]`, `page_size=1`, and inspect the result for a page whose URL property equals the candidate.
-   - If the MCP call errors (timeout, 5xx, transient network), retry up to 3× with exponential backoff at 1s, 3s, 9s.
-   - If still failing after 3 retries, **skip this URL** (do NOT insert) and append a line to the digest's "Dedup-check failures" section.
-   - Rationale: Notion `url`-type properties are NOT uniqueness-enforced, so inserting without a successful dedup check can create duplicate rows.
+6. **Dedup check (O(1) local lookup):**
+   - Check the candidate URL against the **known URL set** built in § INIT — LOAD KNOWN URL SET. If present, skip this URL (dedup hit).
+   - Do NOT call `notion-search` for per-URL dedup — semantic search does not reliably match URL-property values, so per-candidate search would treat every URL as new and create duplicate rows.
+   - The known URL set is populated once at run start via Flats data source enumeration and is the canonical dedup source for this run.
 7. **Enrichment (Rightmove / Zoopla):**
    a. Call `mcp__playwright__browser_navigate` with the listing URL.
    b. Call `mcp__playwright__browser_evaluate` with a portal-specific snippet that pulls title / price / beds / size / floor / furnished / available-from / description text / amenity hints, **plus floorplan image URL(s) and listing photo URLs with captions**. Examples:
@@ -294,7 +316,7 @@ Notion workspace with two databases under parent page [FLAT_TRACKER_NOTION_PAREN
 
 Properties on Flats (see tracker/flats-schema.md for full types): Title (title), URL, Platform, Found On, Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status, Reason, Needs-verify, Notes, Source.
 
-Dedup: before inserting, query the Flats data source filtered on `URL == <candidate URL>`. Skip if any match.
+Dedup: use the in-memory known URL set built once at run start by § INIT — LOAD KNOWN URL SET. Skip the candidate if its URL is in the set. Do NOT use `notion-search` for per-URL dedup — it is semantic and does not reliably match URL-property values.
 
 Set `Source` on every new row:
 - `email-alert` when the row came from the Alert Ingestion path

@@ -38,14 +38,20 @@ Reject outright if any of:
 - Rent > £[FLAT_BUDGET_HARD_CAP] pcm
 - Area not in [FLAT_PRIMARY_AREAS] ∪ [FLAT_SECONDARY_AREAS]
 - Stated size < [FLAT_SIZE_FLOOR_M2] m²
+- **1-bed with verified size < 55 m²** (stated-text or floorplan source). 1-beds where size is not verified are NOT auto-rejected here — see § SIZE RESOLUTION rule 5 (kept, capped at MEDIUM). Rationale: human review consistently downgrades sub-55m² 1-beds with rationales like "very small" / "35sm".
+- **Title or description contains the word "studio"** (case-insensitive, word-boundary `\bstudio\b`). Studios are routinely miscategorized by agents as 1-bed and consistently fail the size floor — drop pre-enrichment.
 - Obviously dated/unrenovated (tired photos, old fittings, yellowing bathroom)
 
 ## SIZE RESOLUTION (priority order)
 
 1. Stated in listing text (structured JSON, when sensible — positive number, 10–500 m², not in nonsensical units) → use, set `Size Source=stated-text`.
-2. Stated on floorplan image → extracted via § VISUAL EXTRACTION — FLOORPLAN screenshot during scraping enrichment step 7e. Set `Size Source=floorplan`. This is the most reliable source — floorplan-stated size overrides structured JSON when both are available.
-3. 2-bed + no size → assume ≥60 m², accept, set `Size Source=inferred-2bed`.
-4. 1-bed + no size (no text, no floorplan):
+2. Stated on floorplan image → extracted via § VISUAL EXTRACTION — FLOORPLAN screenshot during scraping enrichment step 7f. Set `Size Source=floorplan`. This is the most reliable source — floorplan-stated size overrides structured JSON when both are available.
+3. **Stated in description free-text** → run a regex over the listing description (Rightmove `description`, Zoopla `description` or `summary`, OpenRent body text) for any of these patterns (case-insensitive):
+   - `(\d+(?:\.\d+)?)\s*m\s*²` or `(\d+(?:\.\d+)?)\s*(?:sq\.?\s*m|sqm|square\s*met(?:re|er)s?)` → metres directly.
+   - `(\d+(?:\.\d+)?)\s*(?:sq\.?\s*ft|sqft|square\s*f(?:ee|oo)t)` → multiply by 0.0929 to get m².
+   Take the FIRST match, sanity-check (10 ≤ size ≤ 500 m²), set `Size Source=stated-text`. This catches listings where the agent typed size into the body but didn't fill the structured field — a recurring failure mode from human-labeled feedback ("info on plans picture" / "info is available on plans picture" appeared in multiple LOW rationales).
+4. 2-bed + no size → assume ≥60 m², accept, set `Size Source=inferred-2bed`.
+5. 1-bed + no size (no text, no floorplan, no description regex hit):
    - INCLUDE but cap tier at MEDIUM
    - Add `Needs-verify: size` to `Needs-verify` column
    - If photos show large living room + separate kitchen + proper double bedroom → `Size Source=inferred-1bed-photos`
@@ -68,13 +74,23 @@ Modifiers:
 - Area in [FLAT_SECONDARY_AREAS]: −1
 - Unfurnished or part-furnished: +0.5
 - Rent above £[FLAT_BUDGET_SWEET_MAX] and up to £[FLAT_BUDGET_HARD_CAP]: −[FLAT_STRETCH_PENALTY]
+- **Carpet detected in living/bedroom photo: −1.** Confirmed carpet (not wood/tile/vinyl) in living areas drove multiple human LOW labels with rationales like "Weird space, carpet" / "Carpet in rooms".
+- **Open-plan kitchen detected: +1.** Kitchen visible from / pass-through to living area is a strong positive signal — the only HIGH-rationale verbatim was "real open kitchen and big living room". Closed/separated kitchen is neutral (no penalty), but record in Reason as `closed-kitchen` for transparency.
+- **Noise hotspot match: −2 AND force `Calm=No`.** If the listing title, address, or description contains any substring from `[FLAT_NOISE_HOTSPOTS]` (case-insensitive), apply this penalty. Default hotspots (overridable in config): `Arsenal`, `Emirates Stadium`, `Highbury Stadium Square`, `Drayton Park`, `Wembley`, `White Hart Lane`, `Tottenham Hotspur`. These mark properties in immediate proximity to major venues / arenas where match-day disruption is significant. The user verbatim downgraded a Queensland Rd Arsenal listing from HIGH to MEDIUM citing "right next to the arsenal stadium, will be hell of disruption and noise" — this rule operationalises that.
+- **Availability-window alignment** (anchor: [MOVE_IN_DATE], parsed as `MOVE_IN_TARGET` = the first of [MOVE_IN_MONTH] in the year given, e.g. "early June 2026" → 2026-06-01; "mid June 2026" → 2026-06-15):
+  - Available From within `[MOVE_IN_TARGET − 14d, MOVE_IN_TARGET + 14d]`: **+1** (sweet spot)
+  - Available From within `[MOVE_IN_TARGET − 30d, MOVE_IN_TARGET − 14d)` (slightly early — manageable, costs ~2 weeks of overlapping rent): **0**
+  - Available From `< MOVE_IN_TARGET − 30d` (more than a month early — wastes a month+ of rent): **−0.5**
+  - Available From `> MOVE_IN_TARGET + 14d` (later than the move-in target — would force temp housing): **−2**
+  - Available From unknown / not stated: **0** (don't penalise; many listings don't surface this in structured JSON, leave for human review)
+  - Append the resolved bucket to Reason as `avail-aligned` / `avail-early` / `avail-very-early` / `avail-late` / `avail-unknown` for transparency.
 
 Tiers:
-- HIGH: score ≥ [FLAT_TIER_HIGH_THRESHOLD]
-- MEDIUM: [FLAT_TIER_MEDIUM_THRESHOLD] ≤ score < [FLAT_TIER_HIGH_THRESHOLD]
+- HIGH: score ≥ [FLAT_TIER_HIGH_THRESHOLD] **AND `Size Source ∈ {stated-text, floorplan}`**. The size-verified gate is required for auto-HIGH because human review consistently downgrades unverified-size listings ("No plan", "info on plans picture" appeared as LOW rationales on auto-HIGH-scored rows). If score ≥ HIGH threshold but size is inferred/unknown → tier MEDIUM, append `unverified-size` to Needs-verify.
+- MEDIUM: [FLAT_TIER_MEDIUM_THRESHOLD] ≤ score < [FLAT_TIER_HIGH_THRESHOLD], OR (score ≥ HIGH threshold but size is unverified).
 - LOW: score < [FLAT_TIER_MEDIUM_THRESHOLD]
 
-**Cap:** size-unknown 1-beds (rule 4 above) → tier cannot exceed MEDIUM even if score ≥ HIGH threshold.
+**Cap:** size-unknown 1-beds (SIZE RESOLUTION rule 5 above) → tier cannot exceed MEDIUM even if score ≥ HIGH threshold (this is a stricter form of the auto-HIGH gate, kept for clarity).
 
 ## INIT — LOAD KNOWN URL SET (runs once, before any ingestion)
 
@@ -166,7 +182,7 @@ Drives a real Chromium from the laptop's residential IP via Playwright MCP. Bypa
 
 ### Mandatory when Playwright is healthy
 
-If Playwright is available, this section **MUST** run to completion for all 4 portals × 8 primary areas (plus secondary areas on Mondays). Scraping is not optional based on "alert-ingestion already produced rows" or "projected runtime is long" or "alert/scrape overlap looks high". The whole point of scraping is to cover Zoopla / SpareRoom / OpenRent that alerts don't see. Overlap with alert-sourced Rightmove rows is EXPECTED and handled by the O(1) local URL dedup (§ INIT — LOAD KNOWN URL SET) — it is not a reason to skip.
+If Playwright is available, this section **MUST** run to completion for all 4 portals × (8 primary + 8 secondary) areas. **Scrape primary areas first, then secondary**, so the 60 min wall-clock kill (§ Rate limiting) preserves primary coverage if the budget runs out mid-scrape. Scraping is not optional based on "alert-ingestion already produced rows" or "projected runtime is long" or "alert/scrape overlap looks high". The whole point of scraping is to cover Zoopla / SpareRoom / OpenRent that alerts don't see. Overlap with alert-sourced Rightmove rows is EXPECTED and handled by the O(1) local URL dedup (§ INIT — LOAD KNOWN URL SET) — it is not a reason to skip.
 
 Only legitimate reasons to skip or abort scraping:
 - Playwright unavailable (probe below fails).
@@ -200,6 +216,23 @@ Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slug
 - **OpenRent** (single URL with comma-separated terms):
   `https://www.openrent.co.uk/properties-to-rent/london?term=Islington,Angel,Camden%20Town,Kentish%20Town,De%20Beauvoir%20Town,Highbury,Canonbury,Clerkenwell&prices_max=[FLAT_BUDGET_HARD_CAP]&bedrooms_min=[FLAT_BEDROOMS_MIN]&bedrooms_max=[FLAT_BEDROOMS_MAX]&isLive=true`
 
+### Portal search URLs (secondary areas)
+
+Run after primary areas complete. Same URL patterns as above; only the area slug / location identifier changes. For Rightmove, REGION codes for secondary areas aren't pre-cached — build the URL with `searchLocation=<area+name>` (URL-encoded) instead of `locationIdentifier=REGION%5E<id>`. Rightmove will resolve the search and the listing extraction logic in step 7b is unchanged.
+
+- **Rightmove** (8 URLs, one per secondary area, using `searchLocation` text search):
+  `https://www.rightmove.co.uk/property-to-rent/find.html?searchLocation=[area+name]&minBedrooms=[FLAT_BEDROOMS_MIN]&maxBedrooms=[FLAT_BEDROOMS_MAX]&maxPrice=[FLAT_BUDGET_HARD_CAP]&propertyTypes=flat&includeLetAgreed=false&sortType=6`
+  Areas (URL-encoded): `Tufnell+Park`, `Holloway`, `Bloomsbury`, `Russell+Square`, `Barbican`, `Finsbury+Park`, `London+Bridge`, `Bermondsey`.
+
+- **Zoopla** (one URL per secondary area, slug = lowercased dashed):
+  Slugs: `tufnell-park`, `holloway`, `bloomsbury`, `russell-square`, `barbican`, `finsbury-park`, `london-bridge`, `bermondsey`.
+
+- **SpareRoom** (one URL per secondary area, slug = lowercased underscored):
+  Slugs: `tufnell_park`, `holloway`, `bloomsbury`, `russell_square`, `barbican`, `finsbury_park`, `london_bridge`, `bermondsey`.
+
+- **OpenRent** (single combined URL):
+  `https://www.openrent.co.uk/properties-to-rent/london?term=Tufnell%20Park,Holloway,Bloomsbury,Russell%20Square,Barbican,Finsbury%20Park,London%20Bridge,Bermondsey&prices_max=[FLAT_BUDGET_HARD_CAP]&bedrooms_min=[FLAT_BEDROOMS_MIN]&bedrooms_max=[FLAT_BEDROOMS_MAX]&isLive=true`
+
 ### Scraping loop (per portal-area search URL)
 
 1. Call `mcp__playwright__browser_navigate` with the search URL.
@@ -222,38 +255,52 @@ Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slug
    b. Call `mcp__playwright__browser_evaluate` with a portal-specific snippet that pulls title / price / beds / size / floor / furnished / available-from / description text / amenity hints, **plus floorplan image URL(s) and listing photo URLs with captions**. Examples:
       - Rightmove: `() => { const m = window.PAGE_MODEL; if (!m) return null; const p = m.propertyData || {}; return { ...p, _floorplanUrl: ((p.floorplans || p.floorplanImages || [])[0]?.url) || null, _photos: (p.images || []).map(i => ({ url: i.url, caption: i.caption })) }; }` then parse the result.
       - Zoopla: `() => { const d = window.__PRELOADED_STATE__ || JSON.parse(document.querySelector('script#__NEXT_DATA__')?.textContent || '{}'); return d; }` then locate the listing object, floorplan URL (path varies — look for a `floorPlanImages`, `floorPlan`, `floorplan`, or `floorPlanImage` key in the listing data), and photo array.
-   c. **Cheap hard filters (structured data only):** reject immediately if beds outside 1–2, or rent > [FLAT_BUDGET_HARD_CAP], or area not in primary ∪ secondary. These use only structured JSON. If any fails → skip this listing entirely, no visual extraction. (Note: "obviously dated/unrenovated" is NOT a cheap filter for RM/Zoopla — photos now provide the New/Renovated signal via step 7f, and § SCORING already penalizes dated listings.)
-   d. **Size-gate check:** if the structured JSON provides a sensible size (positive number in m² or sq ft, between 10 m² and 500 m², not in nonsensical units like hectares) AND that size is below [FLAT_SIZE_FLOOR_M2] → reject immediately, no visual extraction.
-   e. **Floorplan pass (Rightmove / Zoopla only, if floorplan URL exists):** see § VISUAL EXTRACTION — FLOORPLAN below.
-   f. **Photo pass (Rightmove / Zoopla only, if listing photos exist):** see § VISUAL EXTRACTION — PHOTOS below.
-   g. **Merge visual data** into the listing record. Priority rules:
-      - **Size:** floorplan-stated size wins (set `Size Source=floorplan`). If no floorplan size, use sensible structured JSON size (set `Size Source=stated-text`). Otherwise fall back to § SIZE RESOLUTION inference rules.
+   c. **Cheap hard filters (structured data + title/description text):** reject immediately if any of:
+      - beds outside 1–2
+      - rent > [FLAT_BUDGET_HARD_CAP]
+      - area not in primary ∪ secondary
+      - **title or description matches `\bstudio\b`** (case-insensitive, word-boundary) — see § HARD FILTERS
+      If any fails → skip this listing entirely, no visual extraction. (Note: "obviously dated/unrenovated" is NOT a cheap filter for RM/Zoopla — photos now provide the New/Renovated signal via step 7g, and § SCORING already penalizes dated listings.)
+   d. **Description-text size pass (cheap, runs before floorplan navigation):** if the structured JSON has no sensible size, scan the description body with the regex patterns in § SIZE RESOLUTION rule 3. If a hit is found, record it as `_descriptionSize` with `Size Source=stated-text` for the merge step (7g). Don't reject yet — let the floorplan pass run too, and the merge will pick the best source.
+   e. **Size-gate check:** if a sensible size is now known (from structured JSON or step 7d description regex) AND it is below [FLAT_SIZE_FLOOR_M2] → reject immediately, no visual extraction. **Additional 1-bed gate:** if beds=1 AND the verified size (`stated-text` or `floorplan` from any prior step) is < 55 m² → reject (per § HARD FILTERS).
+   f. **Floorplan pass (Rightmove / Zoopla only, if floorplan URL exists):** see § VISUAL EXTRACTION — FLOORPLAN below.
+   g. **Photo pass (Rightmove / Zoopla only, if listing photos exist):** see § VISUAL EXTRACTION — PHOTOS below.
+   h. **Merge visual data** into the listing record. Priority rules:
+      - **Size:** floorplan-stated size wins (set `Size Source=floorplan`). If no floorplan size, use the description-regex size from step 7d if available (set `Size Source=stated-text`). If neither, use sensible structured JSON size from the evaluate result (set `Size Source=stated-text`). Otherwise fall back to § SIZE RESOLUTION inference rules.
       - **Boolean/enum fields** (bathtub, wood floor, light, new/renovated, floor): visual evidence overrides "Unknown" from structured data. Visual evidence never downgrades a "Yes" to "No" (the feature might not be photographed). If both floorplan and photos provide a signal, "Yes" wins.
       - **Floor level:** floorplan text overrides vague JSON. Only set "Top" when the source explicitly says top/penthouse/uppermost, or when both current floor and total floors are known and match. Ground/Lower Ground = "Ground". All other numbered floors = "Mid". Add `Needs-verify: floor` when the floor number is ≥3 but top-floor status can't be confirmed.
-   h. **Post-visual size filter:** if the merged size (from floorplan, structured data, or inference) is below [FLAT_SIZE_FLOOR_M2] → reject. Do NOT create a Notion row.
-   i. Score per § SCORING. Call `mcp__claude_ai_Notion__notion-create-pages` with parent `{type: "data_source_id", data_source_id: "[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]"}` and properties: Title, URL, Platform, Found On (today's date, Europe/Zurich), Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status=`NEW`, Reason, Needs-verify, Source=`scraped-local`. Do NOT set Human Tier or Human Rationale.
+      - **Carpet / open-kitchen booleans** (from § VISUAL EXTRACTION — PHOTOS): feed § SCORING modifiers and append to Reason text as `carpet✓` / `open-kitchen✓` / `closed-kitchen` for transparency. Not stored as Notion columns.
+   i. **Post-visual size filter:** if the merged size (from floorplan, description regex, structured data, or inference) is below [FLAT_SIZE_FLOOR_M2] → reject. **1-bed extra gate:** if beds=1 AND merged Size Source ∈ {stated-text, floorplan} AND merged size < 55 m² → reject. Do NOT create a Notion row.
+   j. Score per § SCORING. Call `mcp__claude_ai_Notion__notion-create-pages` with parent `{type: "data_source_id", data_source_id: "[FLAT_TRACKER_FLATS_DATA_SOURCE_ID]"}` and properties: Title, URL (canonicalised per § TRACKER URL normalisation), Platform, Found On (today's date, Europe/Zurich), Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status=`NEW`, Reason, Needs-verify, Source=`scraped-local`. Do NOT set Human Tier or Human Rationale.
    - If listing-page navigate times out or the portal returns an empty/error page for this specific listing, create a minimal Notion row with Title + URL + Platform + Source=`scraped-local` + Needs-verify=`listing page unreachable`, and leave Score + Tier blank.
 
    **Enrichment (SpareRoom / OpenRent):**
    - No floorplan or photo visual extraction. Use the existing SpareRoom/OpenRent enrichment approach: inspect the rendered page via `mcp__playwright__browser_snapshot` and read visible text for price / beds / size / address / furnished / available-from, plus `<meta property="og:title">`, `<meta name="description">`, and any JSON-LD `<script type="application/ld+json">` block. If fields can't be confidently extracted, insert a minimal row (Title + URL + Platform + Source=`scraped-local` + Needs-verify=`extraction incomplete`) rather than dropping the listing.
    - Apply HARD FILTERS (beds in 1–2, rent ≤ [FLAT_BUDGET_HARD_CAP], area in primary ∪ secondary, stated size ≥ [FLAT_SIZE_FLOOR_M2] or size-inferred per § SIZE RESOLUTION). If any filter fails, skip — do NOT create a Notion row.
-   - Score and insert as per step 7i above.
+   - Score and insert as per step 7j above.
 
 ### VISUAL EXTRACTION — FLOORPLAN
 
-This section is called from enrichment step 7e. It runs for Rightmove and Zoopla listings only, when the structured JSON contains a floorplan image URL.
+This section is called from enrichment step 7f. It runs for Rightmove and Zoopla listings only, when the structured JSON contains a floorplan image URL.
 
 1. Extract the floorplan image URL:
    - **Rightmove:** `_floorplanUrl` from the evaluate result (populated from `PAGE_MODEL.propertyData.floorplans[0].url`).
    - **Zoopla:** locate the floorplan URL in the evaluate result. Look for keys named `floorPlanImages`, `floorPlan`, `floorplan`, or `floorPlanImage` in the listing data object. Take the first URL found.
-   - If no floorplan URL is found, skip this section — continue to step 7f (photo pass).
+   - If no floorplan URL is found, skip this section — continue to step 7g (photo pass).
 
-2. Call `mcp__playwright__browser_navigate` with the floorplan image URL. Timeout: 15 seconds. If navigation fails or times out, log "Floorplan navigation failed for {listing URL}" and skip to step 7f.
+2. Call `mcp__playwright__browser_navigate` with the floorplan image URL. Timeout: 15 seconds. If navigation fails or times out, log "Floorplan navigation failed for {listing URL}" and skip to step 7g.
 
-3. Call `mcp__playwright__browser_take_screenshot`. If the screenshot fails, log and skip to step 7f.
+3. Call `mcp__playwright__browser_take_screenshot`. If the screenshot fails, log and skip to step 7g.
 
 4. Examine the screenshot and extract:
-   - **Total floor area:** look for text at the bottom or top of the floorplan image, typically "Approx. Gross Internal Floor Area NNN sq. ft / NN.NN sq. m" or just "NNN sq ft" or "NN m²". If the area is in sq ft only, convert: `m² = sq_ft × 0.0929`. Round to 1 decimal place.
+   - **Total floor area:** scan the ENTIRE image for ANY area text — corners, margins, top, bottom, embedded in title block, small print at edges. Common patterns:
+     - "Approx. Gross Internal Floor Area NNN sq. ft / NN.NN sq. m"
+     - "Total Area: NNN sq ft" / "Total: NN m²"
+     - "GIA: NNN sqft" / "Approximate Floor Area: NN m²"
+     - Just a bare "NNN sq ft" or "NN m²" near the title or in a corner
+     - Some plans split per-room areas — sum them only as a last resort, and clearly mark the resulting size as `Size Source=floorplan` with `Needs-verify: size-summed`.
+     If the area is in sq ft only, convert: `m² = sq_ft × 0.0929`. Round to 1 decimal place.
+     Be aggressive — historical labeled data shows multiple LOW rationales of "info on plans picture" / "info is available on plans picture" (i.e., the human could see it but our extraction missed it). If the screenshot is too low-res to read small text, retry with `mcp__playwright__browser_take_screenshot` after `mcp__playwright__browser_resize` to a larger viewport (e.g. 1600×1200) once before giving up.
    - **Floor level:** look for text like "Fourth Floor", "Ground Floor", "First Floor", "Basement", "Lower Ground Floor" printed on or near the plan. Map to the Floor enum:
      - "Top" — only if the text explicitly says "top floor", "penthouse", or "uppermost", OR if both the current floor number and total building floors are known and they match.
      - "Ground" — if it says "Ground Floor" or "Lower Ground Floor".
@@ -265,7 +312,7 @@ This section is called from enrichment step 7e. It runs for Rightmove and Zoopla
 
 ### VISUAL EXTRACTION — PHOTOS
 
-This section is called from enrichment step 7f. It runs for Rightmove and Zoopla listings only, when the structured JSON contains listing photo URLs.
+This section is called from enrichment step 7g. It runs for Rightmove and Zoopla listings only, when the structured JSON contains listing photo URLs.
 
 1. Select up to 3 photos from the listing's photo array:
    - **Caption-based selection (preferred):** scan the `_photos` array (Rightmove) or equivalent Zoopla photo array for entries whose `caption` (case-insensitive) contains any of: `bathroom`, `bath`, `shower room`, `kitchen`, `living`, `bedroom`, `reception`, `lounge`. Select photos in this priority order:
@@ -280,12 +327,12 @@ This section is called from enrichment step 7f. It runs for Rightmove and Zoopla
    b. Call `mcp__playwright__browser_take_screenshot`. If the screenshot fails, skip this photo.
    c. Examine the screenshot and extract the relevant fields based on what the photo shows:
       - **Bathroom photo:** Bathtub — "Yes" if a rectangular tub is visible (freestanding, built-in, or shower-over-bath), "No" if only a shower stall/cubicle is visible, "Unknown" if unclear. Also note Light and New/Renovated if assessable.
-      - **Room photo (living/bedroom/reception):** Wood floor — "Yes" if hardwood, parquet, or engineered-wood flooring is visible (laminate that looks like wood counts as "Yes"), "No" if carpet, tile, or vinyl is visible, "Unknown" if unclear. Light — "Good" if large windows with visible daylight, "Poor" if small/few windows or dark, "Avg" if mixed, "Unknown" if photo doesn't show windows. New/Renovated — "Yes" if modern fittings, contemporary style, fresh paint, "No" if dated fixtures/wallpaper/worn surfaces, "Unknown" if unclear.
-      - **Kitchen photo:** New/Renovated — "Yes" if modern kitchen with contemporary units/appliances, "No" if dated, "Unknown" if unclear.
+      - **Room photo (living/bedroom/reception):** Wood floor — "Yes" if hardwood, parquet, or engineered-wood flooring is visible (laminate that looks like wood counts as "Yes"), "No" if carpet, tile, or vinyl is visible, "Unknown" if unclear. **Carpet flag** — separately, if carpet is the visible flooring (any colour, any pile), mark `carpet=true` for this photo. This is treated as a scoring penalty (see § SCORING) distinct from "wood=No" so we don't lose the signal when wood is absent for non-carpet reasons (tile, vinyl). Light — "Good" if large windows with visible daylight, "Poor" if small/few windows or dark, "Avg" if mixed, "Unknown" if photo doesn't show windows. New/Renovated — "Yes" if modern fittings, contemporary style, fresh paint, "No" if dated fixtures/wallpaper/worn surfaces, "Unknown" if unclear.
+      - **Kitchen photo:** New/Renovated — "Yes" if modern kitchen with contemporary units/appliances, "No" if dated, "Unknown" if unclear. **Open-plan flag** — separately, if the photo shows a kitchen that is visually continuous with a living/dining space (no full-height wall separating the cooking area from a sofa/dining/living zone in the same frame, or a clear pass-through opening), mark `open_kitchen=true`. If the kitchen is fully enclosed (own room, doorway separator), mark `open_kitchen=false`. If unclear from the photo, leave `open_kitchen=null`. If a living/reception photo shows the kitchen visible in the same frame, that ALSO counts as `open_kitchen=true`.
 
-3. Consolidate across all photos: for each field (bathtub, wood floor, light, new/renovated), if any photo yielded a definitive "Yes" or "No", use that. If multiple photos disagree, prefer "Yes" over "No" (the negative photo might show a different room). If all photos yielded "Unknown" for a field, keep "Unknown".
+3. Consolidate across all photos: for each field (bathtub, wood floor, light, new/renovated, carpet, open_kitchen), if any photo yielded a definitive "Yes"/"No"/`true`/`false`, use that. If multiple photos disagree, prefer "Yes"/`true` over "No"/`false` for positive signals (bathtub, wood, open_kitchen — the negative photo might show a different room). For carpet, conservative rule: only mark `carpet=true` if it appears in 2+ room photos OR if a single living-area photo clearly shows carpet (avoid false positives from one bedroom photo). If all photos yielded "Unknown"/`null`, keep "Unknown"/`null`.
 
-4. Return the consolidated values (bathtub, wood_floor, light, new_renovated) to the merge step (7g).
+4. Return the consolidated values (bathtub, wood_floor, light, new_renovated, carpet, open_kitchen) to the merge step (7g). The carpet and open_kitchen booleans feed the scoring modifiers in § SCORING and should be appended to the Reason text as `carpet✓` / `open-kitchen✓` / `closed-kitchen` for transparency. They do NOT need separate Notion columns — the score and Reason capture the signal.
 
 ### Pagination cutoff (per portal-area)
 
@@ -305,7 +352,7 @@ Paginate to page 2, then page 3, capped at 3 pages total, subject to this early-
 
 ### Secondary-area cadence
 
-Primary areas (8) scrape every run. **Secondary areas (8) scrape only on Monday runs** (day-of-week = 1 in Europe/Zurich). This halves the daily budget and reflects that secondary areas rarely produce HIGH hits.
+Both primary (8) and secondary (8) areas scrape every run. The 60 min wall-clock kill is a sufficient budget guard — when we hit it, we already-have-good-coverage on primary by ordering: scrape primary areas first, then secondary. If the budget runs out mid-secondary, that's acceptable (secondary historically produces fewer HIGH hits anyway, so partial coverage is fine). The earlier Monday-only restriction starved 6/7 daily runs of secondary-area visibility for a marginal budget win — not worth it.
 
 ## TRACKER
 
@@ -317,6 +364,17 @@ Notion workspace with two databases under parent page [FLAT_TRACKER_NOTION_PAREN
 Properties on Flats (see tracker/flats-schema.md for full types): Title (title), URL, Platform, Found On, Area, Price, Beds, Size, Size Source, Furnished, Available From, Floor, Bathtub, New/Renovated, Calm, Light, Wooden Floor, Score, Tier, Status, Reason, Needs-verify, Notes, Source.
 
 Dedup: use the in-memory known URL set built once at run start by § INIT — LOAD KNOWN URL SET. Skip the candidate if its URL is in the set. Do NOT use `notion-search` for per-URL dedup — it is semantic and does not reliably match URL-property values.
+
+**URL normalisation before set lookup and before insertion** — listings can re-arrive with cosmetically-different URLs that resolve to the same canonical page. Normalise every candidate URL (and every URL stored in the known set) by:
+1. Lowercasing the scheme + host.
+2. Stripping trailing slashes from the path.
+3. Dropping `?utm_*`, `?source=`, `?ref=`, `?campaign=`, `&channel=`, and any tracking query parameters.
+4. For Rightmove: keep only `/properties/<id>` — strip everything after.
+5. For Zoopla: keep only `/to-rent/details/<id>/` — strip everything after.
+6. For OpenRent: keep only `/property-to-rent/london/<slug>/<id>` — strip everything after.
+This catches the trailing-slash / trailing-`?` / utm-tagged variants that historically slipped past dedup and produced duplicate rows for the same listing.
+
+**Residual duplicate source (acknowledged limitation):** the same physical property is sometimes re-listed by a different agent with a NEW listing ID (e.g., Bartholomew Rd appeared with two distinct Rightmove IDs days apart). URL-based dedup cannot catch these. A future enhancement could add an address+price+beds fingerprint as a secondary check; for now, accept the rare dupe and rely on human review to spot it.
 
 Set `Source` on every new row:
 - `email-alert` when the row came from the Alert Ingestion path
@@ -396,14 +454,17 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 - Alert emails queried for the target sender domains in the last 2 days (labeled threads excluded via `-label:hunt-processed`)
 - Fully-processed alert threads labeled `hunt-processed` in Gmail
 - Playwright MCP availability probed at the start of § SCRAPING. If unavailable, digest records a `⚠️ Scraping skipped (Playwright unavailable)` line.
-- Scraping attempted for every primary portal-area; for each one, digest records one of: (a) new rows added, (b) early-exit after ≥3 consecutive known listings, (c) 3-page cap reached, (d) block/CAPTCHA skip.
-- On Mondays only, secondary portal-areas also scraped.
+- Scraping attempted for every primary AND secondary portal-area on every run (primary first, then secondary so budget kills preserve primary coverage); for each one, digest records one of: (a) new rows added, (b) early-exit after ≥3 consecutive known listings, (c) 3-page cap reached, (d) block/CAPTCHA skip, (e) skipped because 60 min budget exceeded.
 - Flats database has new pages for every listing that passed hard filters and survived URL dedup, with `Source=scraped-local` for scraping-origin rows and `Source=email-alert` for alert-origin rows.
 - Dedup-check failures (Notion query errored after 3 retries with exponential backoff) surfaced in the digest under a "Dedup-check failures" section; NO row inserted on fail-closed.
 - Meta database: `last_local_run` stamped on local runs; `last_remote_run` stamped on remote runs.
 - No listings added that violate hard filters.
 - No duplicate URLs in Notion (dedup holds across both ingestion paths; URL column is canonical but NOT uniqueness-enforced by Notion — correctness depends on the pre-insert query succeeding).
-- HIGH tier caps respected for size-unknown 1-beds.
+- HIGH tier caps respected for size-unknown 1-beds, AND for any listing where `Size Source ∉ {stated-text, floorplan}` (auto-HIGH requires verified size — see § SCORING Tiers).
+- No "studio" listings inserted (rejected at § HARD FILTERS via title/description word-boundary match).
+- No 1-bed listings inserted with verified size < 55 m² (the new floor for 1-beds with stated-text or floorplan sizes).
+- Description-text size regex (§ SIZE RESOLUTION rule 3) attempted for every Rightmove/Zoopla listing with no structured-JSON size; digest records hit-rate vs. attempts.
+- Carpet / open-kitchen booleans surfaced in Reason text on every Rightmove/Zoopla row that ran photo extraction.
 - For Rightmove/Zoopla scraped listings with floorplan images, `Size Source = floorplan` should appear on the majority of new rows. If consistently low, investigate whether floorplan URL extraction or screenshot reading is failing silently.
 - Visual extraction (floorplan + photos) attempted for every new Rightmove/Zoopla listing that passes cheap hard filters. Digest records count of successful floorplan reads vs. total attempts.
 - Outreach .txt files saved for HIGH priority (local mode only).

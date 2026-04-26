@@ -162,6 +162,14 @@ FLAT_PRIMARY_AREAS=Islington, Angel, Camden Town, Kentish Town, De Beauvoir Town
 FLAT_SECONDARY_AREAS=Tufnell Park, Holloway, Bloomsbury, Russell Square, Barbican, Finsbury Park, London Bridge, Bermondsey
 ```
 
+### Noise hotspots (immediate-proximity penalty applied at scoring time)
+
+Listings whose title / address / description matches any of these substrings (case-insensitive) get `Calm=No` forced and a −2 score penalty. Use specific landmark names, not whole areas — area-level proximity is already captured by primary/secondary lists. Default targets are major event venues where match-day noise is significant. Edit per personal tolerance.
+
+```
+FLAT_NOISE_HOTSPOTS=Arsenal, Emirates Stadium, Highbury Stadium Square, Drayton Park, Wembley, White Hart Lane, Tottenham Hotspur
+```
+
 ### Scoring weights (overrides — defaults in skill-flats.md)
 
 ```

@@ -182,18 +182,14 @@ Drives a real Chromium from the laptop's residential IP via Playwright MCP. Bypa
 
 ### Mandatory when Playwright is healthy
 
-If Playwright is available, this section **MUST** run to completion for all 4 portals × (8 primary + 8 secondary) areas. **Scrape primary areas first, then secondary**, so the 60 min wall-clock kill (§ Rate limiting) preserves primary coverage if the budget runs out mid-scrape. Scraping is not optional based on "alert-ingestion already produced rows" or "projected runtime is long" or "alert/scrape overlap looks high". The whole point of scraping is to cover Zoopla / SpareRoom / OpenRent that alerts don't see. Overlap with alert-sourced Rightmove rows is EXPECTED and handled by the O(1) local URL dedup (§ INIT — LOAD KNOWN URL SET) — it is not a reason to skip.
+If Playwright is available, this section runs to completion for all 4 portals × (8 primary + 8 secondary) areas. Scrape primary areas first, then secondary. Rightmove area scraping (the search-pages-by-area in this section) is distinct from Rightmove alert-URL ingestion (§ ALERT INGESTION) — both run. Alerts cover individual listings the user has saved-searches for; area scraping covers everything else listed in the area. Overlap is expected and handled by the O(1) local URL dedup (§ INIT — LOAD KNOWN URL SET) at zero listing-creation cost.
 
-**Critical**: Rightmove area scraping (the search-pages-by-area in this section) is DISTINCT from Rightmove alert-URL ingestion (§ ALERT INGESTION). Both must run. Alerts cover individual listings the user has saved-searches for; area scraping covers everything else listed in the area. They overlap by design and dedup handles it.
+Per-portal-area skips are reserved for genuine failures:
+- A single `mcp__playwright__browser_navigate` exceeds 30s timeout → skip that portal-area only, continue.
+- Block / CAPTCHA detected on the search page → skip that portal-area only, continue.
+- Zero-result page (often a portal URL-format change) → skip and flag explicitly in the digest.
 
-Only legitimate reasons to skip or abort scraping:
-- Playwright unavailable (probe below fails).
-- A single `mcp__playwright__browser_navigate` exceeds 30s timeout → skip that portal-area only, continue with the next.
-- Total scraping wall-clock exceeds 60 min → mid-run kill (log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL). This is a hard stop, **not** a pre-flight deferral.
-
-**Self-budgeting (anticipating runtime to skip work) is FORBIDDEN.** "I'll skip Rightmove and SpareRoom because the run is taking long" is not a valid skip — the only time-based skip is the 60 min hard kill, observed after the fact, not predicted. Recurring failure mode in past runs: agent skipped portal-areas based on its own runtime forecast, finished at ~38 min wall (well under budget), and logged "skipped (budget)". Don't.
-
-**Prior-coverage skips are also FORBIDDEN.** "An earlier cron today already scraped this area, so I'll skip it" is not a valid reason. Each run scrapes every portal-area independently; dedup against the in-memory URL set (§ INIT) handles overlap with no listing-creation cost. Listings can change status, price, or be re-listed by different agents within hours — re-scraping is cheap and correct. Observed 2026-04-27: agent skipped 5 of 6 RM primary regions citing "12:14 cron covered them ~80 min earlier"; that's a regression.
+A single external watchdog (`timeout 90m` in `run-hunt.sh`) provides runaway protection. The skill never makes time-based decisions — it just runs through every portal-area in order and reports outcomes.
 
 ### Per-area accounting (REQUIRED in the digest)
 
@@ -204,12 +200,11 @@ The end-of-run digest MUST include a per-portal-area outcome line for **all** 4 
 Where `<outcome>` is one of:
 - `OK` — page loaded, listings extracted, dedup + enrichment ran. `<count>` = listings inserted.
 - `EARLY-EXIT` — 3 consecutive known listings observed, paginated stop. `<count>` = listings inserted before exit.
-- `BLOCKED` — block/CAPTCHA detected, no retry. `<count>` = 0.
+- `BLOCKED` — block/CAPTCHA detected. `<count>` = 0.
 - `TIMEOUT` — single navigate exceeded 30s. `<count>` = 0.
-- `BUDGET-KILL` — 60 min wall-clock exceeded; this and all later areas not attempted.
 - `ZERO-RESULTS` — page loaded but listing-URL regex matched nothing (often a portal URL-format change — flag explicitly).
 
-If any portal-area is missing from this list, the run is incomplete. Self-budgeted skips are NOT a permitted outcome — they would surface here as untyped gaps and that is a regression.
+Every expected portal-area must produce one outcome line. A missing entry is the truth-test that the run was incomplete.
 
 ### Playwright availability probe
 
@@ -373,11 +368,11 @@ Paginate to page 2, then page 3, capped at 3 pages total, subject to this early-
 
 - 2-second wait between `mcp__playwright__browser_navigate` calls to portal search pages and listing pages on the same portal. This rate limit does NOT apply to CDN image URLs (floorplans, listing photos) — those can be navigated without delay.
 - Portals processed sequentially, not in parallel.
-- Typical scrape runtime: 15–30 minutes (with visual extraction). **Hard kill at 60 minutes** of scraping wall-clock — if reached, log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL with whatever was captured. This is an in-progress interrupt only; it never justifies pre-flight skip. Start scraping immediately after the availability probe succeeds.
+- Start scraping immediately after the availability probe succeeds.
 
 ### Secondary-area cadence
 
-Both primary (8) and secondary (8) areas scrape every run. The 60 min wall-clock kill is a sufficient budget guard — when we hit it, we already-have-good-coverage on primary by ordering: scrape primary areas first, then secondary. If the budget runs out mid-secondary, that's acceptable (secondary historically produces fewer HIGH hits anyway, so partial coverage is fine). The earlier Monday-only restriction starved 6/7 daily runs of secondary-area visibility for a marginal budget win — not worth it.
+Both primary (8) and secondary (8) areas scrape every run. Primary first, then secondary.
 
 ## TRACKER
 
@@ -479,7 +474,7 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 - Alert emails queried for the target sender domains in the last 2 days (labeled threads excluded via `-label:hunt-processed`)
 - Fully-processed alert threads labeled `hunt-processed` in Gmail
 - Playwright MCP availability probed at the start of § SCRAPING. If unavailable, digest records a `⚠️ Scraping skipped (Playwright unavailable)` line.
-- Scraping attempted for every primary AND secondary portal-area on every run (primary first, then secondary so budget kills preserve primary coverage). The digest's per-area accounting block (see § Per-area accounting) MUST list outcomes for all expected portal-areas (4 portals × 16 areas). A run that omits any expected area is incomplete and should be flagged. Self-budgeted "skipped (low yield expected)" outcomes are NOT permitted — only the post-hoc 60 min wall-clock kill (`BUDGET-KILL`) is a valid time-based skip.
+- Scraping attempted for every primary AND secondary portal-area on every run (primary first, then secondary). The digest's per-area accounting block (see § Per-area accounting) lists outcomes for all expected portal-areas (4 portals × 16 areas). A run that omits any expected area is incomplete.
 - Flats database has new pages for every listing that passed hard filters and survived URL dedup, with `Source=scraped-local` for scraping-origin rows and `Source=email-alert` for alert-origin rows.
 - Dedup-check failures (Notion query errored after 3 retries with exponential backoff) surfaced in the digest under a "Dedup-check failures" section; NO row inserted on fail-closed.
 - Meta database: `last_local_run` stamped on local runs; `last_remote_run` stamped on remote runs.

@@ -206,71 +206,11 @@ Where `<outcome>` is one of:
 
 Every expected portal-area must produce one outcome line. A missing entry is the truth-test that the run was incomplete.
 
-### Subagent-driven scraping (orchestration)
+### Subagent-driven scraping (orchestrated externally)
 
-Scraping runs as 8 sequential subagent dispatches via the `Agent` tool, one per portal × tier combination. The parent's role is to dispatch, collect outcomes, and never make scraping decisions itself. Subagents are dispatched **serially** because Playwright has a single browser instance; do not dispatch in parallel.
+Scraping is dispatched by `~/hunt/run-hunt.sh` (the cron wrapper), which fires 8 sequential `claude -p` invocations — one per portal × tier (rm-primary, zoopla-primary, sr-primary, or-primary, rm-secondary, zoopla-secondary, sr-secondary, or-secondary). Each invocation receives a narrow prompt with exactly the URLs for its assigned portal-tier, plus paths to the shared run-state directory at `~/hunt/run-state/<run-id>/`. The skill below (§ Portal search URLs, § Scraping loop, § VISUAL EXTRACTION, etc.) describes the work each scrape subagent does for its assigned URLs; the orchestration of WHICH subagent runs WHEN is no longer the agent's responsibility.
 
-**Why subagent-per-portal-tier**: A single agent with 50+ portal-areas in scope reliably skips work it judges low-yield (observed across multiple runs). A subagent given exactly 6–8 areas to scrape, with explicit per-area output requirements, has nothing to defer to and just runs through its list.
-
-**Dispatch order** (parent dispatches one at a time, waits for completion, then dispatches the next):
-
-1. `RM-primary` — 6 Rightmove primary-region URLs (see § Portal search URLs)
-2. `Zoopla-primary` — 8 Zoopla primary-area URLs
-3. `SpareRoom-primary` — 8 SpareRoom primary-area URLs
-4. `OpenRent-primary` — 1 combined OpenRent URL
-5. `RM-secondary` — 8 Rightmove secondary-area URLs (`searchLocation=` text search)
-6. `Zoopla-secondary` — 8 Zoopla secondary-area URLs
-7. `SpareRoom-secondary` — 8 SpareRoom secondary-area URLs
-8. `OpenRent-secondary` — 1 combined OpenRent URL
-
-**Subagent prompt contract** (the parent constructs a self-contained prompt for each):
-
-```
-You are a scraping subagent. Your scope: <portal> <tier> only.
-
-Process EXACTLY these N URLs in order. For each URL, follow the scraping
-loop in § Scraping loop (per portal-area search URL) of skill-flats.md
-(extract listing URLs, dedup against the known URL set provided below,
-enrich Rightmove/Zoopla via § VISUAL EXTRACTION, score per § SCORING,
-insert to Notion via mcp__claude_ai_Notion__notion-create-pages).
-
-URLs to process (one per line, in order):
-  <URL 1>
-  <URL 2>
-  ...
-  <URL N>
-
-Known URL set (for O(1) dedup): <URL list from § INIT, comma-separated>
-
-Hard filters: § HARD FILTERS in skill-flats.md (beds, rent, area, studio
-exclusion, 1-bed verified-size <55m² rejection).
-
-Scoring: § SCORING in skill-flats.md (signal weights, modifiers,
-tier gates including auto-HIGH-requires-verified-size).
-
-REQUIRED OUTPUT (in your final message, no other content):
-  Per-area accounting block — exactly N lines, one per assigned URL,
-  in the format `<portal>/<area>: <outcome> [<count>]` (see § Per-area
-  accounting for outcome enum).
-
-  Listings inserted summary — for each row created in Notion, one line:
-  `<page_id> | <tier> | <score> | <title> | <url>`.
-
-  Errors block (only if any) — failed Notion calls, unexpected portal
-  errors. Concise.
-
-DO NOT:
-  - Skip URLs from your assigned list. If a URL fails, mark it
-    BLOCKED/TIMEOUT/ZERO-RESULTS in the accounting block — never omit.
-  - Do work outside your assigned scope (no other portals, no other
-    tiers, no alert ingestion, no Meta updates, no email digest).
-  - Make time-based decisions. The parent's wrapper has an external
-    timeout that handles runaway protection.
-```
-
-**Parent post-processing**: after all 8 subagents return, the parent assembles the digest from their per-area accounting blocks (concatenated, deduplicated by portal/area key) and the listings inserted summaries. Subagents may have inserted Notion rows directly during their run; the parent only needs to read back the insertion summaries for the digest, not re-fetch from Notion.
-
-**If a subagent fails entirely** (Agent tool returns error, prompt timeout, etc): log the failure for that portal-tier in the digest, continue to the next. Do not retry mid-run; tomorrow's cron will re-process.
+When invoked from a single-skill context (legacy or remote-WebFetch mode), this section is moot — there's no Playwright in remote mode, and the local single-skill invocation has been retired in favour of the Bash orchestrator.
 
 ### Playwright availability probe
 
@@ -540,7 +480,7 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 - Alert emails queried for the target sender domains in the last 2 days (labeled threads excluded via `-label:hunt-processed`)
 - Fully-processed alert threads labeled `hunt-processed` in Gmail
 - Playwright MCP availability probed at the start of § SCRAPING. If unavailable, digest records a `⚠️ Scraping skipped (Playwright unavailable)` line.
-- Scraping attempted for every primary AND secondary portal-area on every run, dispatched as 8 sequential portal-tier subagents per § Subagent-driven scraping. The digest's per-area accounting block (see § Per-area accounting) lists outcomes for all expected portal-areas (4 portals × 16 areas), assembled from subagent reports. A run that omits any expected area, or where a subagent did not produce its required N output lines, is incomplete.
+- Scraping attempted for every primary AND secondary portal-area on every run, dispatched externally as 8 sequential `claude -p` invocations by `~/hunt/run-hunt.sh` (one per portal × tier). The digest's per-area accounting block (see § Per-area accounting) lists outcomes for all expected portal-areas (4 portals × 16 areas), assembled from each phase's structured JSON output in `~/hunt/run-state/<run-id>/`. A run that omits any expected area, or where a phase JSON did not produce its required N output lines, is incomplete.
 - Flats database has new pages for every listing that passed hard filters and survived URL dedup, with `Source=scraped-local` for scraping-origin rows and `Source=email-alert` for alert-origin rows.
 - Dedup-check failures (Notion query errored after 3 retries with exponential backoff) surfaced in the digest under a "Dedup-check failures" section; NO row inserted on fail-closed.
 - Meta database: `last_local_run` stamped on local runs; `last_remote_run` stamped on remote runs.

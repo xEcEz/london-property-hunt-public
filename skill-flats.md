@@ -193,6 +193,8 @@ Only legitimate reasons to skip or abort scraping:
 
 **Self-budgeting (anticipating runtime to skip work) is FORBIDDEN.** "I'll skip Rightmove and SpareRoom because the run is taking long" is not a valid skip — the only time-based skip is the 60 min hard kill, observed after the fact, not predicted. Recurring failure mode in past runs: agent skipped portal-areas based on its own runtime forecast, finished at ~38 min wall (well under budget), and logged "skipped (budget)". Don't.
 
+**Prior-coverage skips are also FORBIDDEN.** "An earlier cron today already scraped this area, so I'll skip it" is not a valid reason. Each run scrapes every portal-area independently; dedup against the in-memory URL set (§ INIT) handles overlap with no listing-creation cost. Listings can change status, price, or be re-listed by different agents within hours — re-scraping is cheap and correct. Observed 2026-04-27: agent skipped 5 of 6 RM primary regions citing "12:14 cron covered them ~80 min earlier"; that's a regression.
+
 ### Per-area accounting (REQUIRED in the digest)
 
 The end-of-run digest MUST include a per-portal-area outcome line for **all** 4 portals × 16 areas (= effectively 14 Rightmove URLs covering 8 primary + 8 secondary, 16 Zoopla URLs, 16 SpareRoom URLs, and 2 combined OpenRent URLs). Format each as one line:

@@ -184,10 +184,30 @@ Drives a real Chromium from the laptop's residential IP via Playwright MCP. Bypa
 
 If Playwright is available, this section **MUST** run to completion for all 4 portals × (8 primary + 8 secondary) areas. **Scrape primary areas first, then secondary**, so the 60 min wall-clock kill (§ Rate limiting) preserves primary coverage if the budget runs out mid-scrape. Scraping is not optional based on "alert-ingestion already produced rows" or "projected runtime is long" or "alert/scrape overlap looks high". The whole point of scraping is to cover Zoopla / SpareRoom / OpenRent that alerts don't see. Overlap with alert-sourced Rightmove rows is EXPECTED and handled by the O(1) local URL dedup (§ INIT — LOAD KNOWN URL SET) — it is not a reason to skip.
 
+**Critical**: Rightmove area scraping (the search-pages-by-area in this section) is DISTINCT from Rightmove alert-URL ingestion (§ ALERT INGESTION). Both must run. Alerts cover individual listings the user has saved-searches for; area scraping covers everything else listed in the area. They overlap by design and dedup handles it.
+
 Only legitimate reasons to skip or abort scraping:
 - Playwright unavailable (probe below fails).
 - A single `mcp__playwright__browser_navigate` exceeds 30s timeout → skip that portal-area only, continue with the next.
 - Total scraping wall-clock exceeds 60 min → mid-run kill (log "Scraping budget exceeded after N portal-areas" and proceed to TRACKER + EMAIL). This is a hard stop, **not** a pre-flight deferral.
+
+**Self-budgeting (anticipating runtime to skip work) is FORBIDDEN.** "I'll skip Rightmove and SpareRoom because the run is taking long" is not a valid skip — the only time-based skip is the 60 min hard kill, observed after the fact, not predicted. Recurring failure mode in past runs: agent skipped portal-areas based on its own runtime forecast, finished at ~38 min wall (well under budget), and logged "skipped (budget)". Don't.
+
+### Per-area accounting (REQUIRED in the digest)
+
+The end-of-run digest MUST include a per-portal-area outcome line for **all** 4 portals × 16 areas (= effectively 14 Rightmove URLs covering 8 primary + 8 secondary, 16 Zoopla URLs, 16 SpareRoom URLs, and 2 combined OpenRent URLs). Format each as one line:
+
+`<portal>/<area>: <outcome> [<count>]`
+
+Where `<outcome>` is one of:
+- `OK` — page loaded, listings extracted, dedup + enrichment ran. `<count>` = listings inserted.
+- `EARLY-EXIT` — 3 consecutive known listings observed, paginated stop. `<count>` = listings inserted before exit.
+- `BLOCKED` — block/CAPTCHA detected, no retry. `<count>` = 0.
+- `TIMEOUT` — single navigate exceeded 30s. `<count>` = 0.
+- `BUDGET-KILL` — 60 min wall-clock exceeded; this and all later areas not attempted.
+- `ZERO-RESULTS` — page loaded but listing-URL regex matched nothing (often a portal URL-format change — flag explicitly).
+
+If any portal-area is missing from this list, the run is incomplete. Self-budgeted skips are NOT a permitted outcome — they would surface here as untyped gaps and that is a regression.
 
 ### Playwright availability probe
 
@@ -205,9 +225,11 @@ Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slug
   - De Beauvoir Town: `locationIdentifier=REGION%5E70393`
   - Clerkenwell: `locationIdentifier=REGION%5E87500`
 
-- **Zoopla** (one URL per primary area, slug = lowercased area with dashes):
-  `https://www.zoopla.co.uk/to-rent/flats/[area-slug]/?beds_min=[FLAT_BEDROOMS_MIN]&beds_max=[FLAT_BEDROOMS_MAX]&price_frequency=per_month&price_max=[FLAT_BUDGET_HARD_CAP]&results_sort=newest_listings`
-  Slugs: `islington`, `angel`, `camden-town`, `kentish-town`, `de-beauvoir-town`, `highbury`, `canonbury`, `clerkenwell`.
+- **Zoopla** (one URL per primary area; the path is `/to-rent/flats/london/<slug>/` AND the area name is also passed via `q=<Area+Name>` because `london` is a broad city-level slug — the `q` param narrows it to the actual neighbourhood):
+  `https://www.zoopla.co.uk/to-rent/flats/london/[area-slug]/?q=[area+name]&beds_min=[FLAT_BEDROOMS_MIN]&beds_max=[FLAT_BEDROOMS_MAX]&price_frequency=per_month&price_max=[FLAT_BUDGET_HARD_CAP]&results_sort=newest_listings`
+  Slugs (path): `islington`, `angel`, `camden-town`, `kentish-town`, `de-beauvoir-town`, `highbury`, `canonbury`, `clerkenwell`.
+  `q` values (URL-encoded, capitalised): `Islington`, `Angel`, `Camden+Town`, `Kentish+Town`, `De+Beauvoir+Town`, `Highbury`, `Canonbury`, `Clerkenwell`.
+  **Note**: Zoopla's URL scheme has churned three times in two weeks (`/to-rent/flats/<slug>/` → `/to-rent/property/<slug>/?property_type=flats` → current). If you encounter zero-result pages on a fresh Zoopla URL, fall back to discovery: navigate `https://www.zoopla.co.uk/to-rent/`, type the area into the search box, observe the redirected URL, and use that pattern. Update this skill section with the new format if you confirm one.
 
 - **SpareRoom** (one URL per primary area, slug = lowercased area with underscores):
   `https://www.spareroom.co.uk/flats-to-rent/london/[area_slug]?min_beds=[FLAT_BEDROOMS_MIN]&max_beds=[FLAT_BEDROOMS_MAX]&max_rent=[FLAT_BUDGET_HARD_CAP]&sort=posted_date&mode=list`
@@ -224,8 +246,9 @@ Run after primary areas complete. Same URL patterns as above; only the area slug
   `https://www.rightmove.co.uk/property-to-rent/find.html?searchLocation=[area+name]&minBedrooms=[FLAT_BEDROOMS_MIN]&maxBedrooms=[FLAT_BEDROOMS_MAX]&maxPrice=[FLAT_BUDGET_HARD_CAP]&propertyTypes=flat&includeLetAgreed=false&sortType=6`
   Areas (URL-encoded): `Tufnell+Park`, `Holloway`, `Bloomsbury`, `Russell+Square`, `Barbican`, `Finsbury+Park`, `London+Bridge`, `Bermondsey`.
 
-- **Zoopla** (one URL per secondary area, slug = lowercased dashed):
-  Slugs: `tufnell-park`, `holloway`, `bloomsbury`, `russell-square`, `barbican`, `finsbury-park`, `london-bridge`, `bermondsey`.
+- **Zoopla** (one URL per secondary area; same `/to-rent/flats/london/<slug>/?q=<Area>` pattern as primary):
+  Slugs (path): `tufnell-park`, `holloway`, `bloomsbury`, `russell-square`, `barbican`, `finsbury-park`, `london-bridge`, `bermondsey`.
+  `q` values (URL-encoded, capitalised): `Tufnell+Park`, `Holloway`, `Bloomsbury`, `Russell+Square`, `Barbican`, `Finsbury+Park`, `London+Bridge`, `Bermondsey`.
 
 - **SpareRoom** (one URL per secondary area, slug = lowercased underscored):
   Slugs: `tufnell_park`, `holloway`, `bloomsbury`, `russell_square`, `barbican`, `finsbury_park`, `london_bridge`, `bermondsey`.
@@ -454,7 +477,7 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 - Alert emails queried for the target sender domains in the last 2 days (labeled threads excluded via `-label:hunt-processed`)
 - Fully-processed alert threads labeled `hunt-processed` in Gmail
 - Playwright MCP availability probed at the start of § SCRAPING. If unavailable, digest records a `⚠️ Scraping skipped (Playwright unavailable)` line.
-- Scraping attempted for every primary AND secondary portal-area on every run (primary first, then secondary so budget kills preserve primary coverage); for each one, digest records one of: (a) new rows added, (b) early-exit after ≥3 consecutive known listings, (c) 3-page cap reached, (d) block/CAPTCHA skip, (e) skipped because 60 min budget exceeded.
+- Scraping attempted for every primary AND secondary portal-area on every run (primary first, then secondary so budget kills preserve primary coverage). The digest's per-area accounting block (see § Per-area accounting) MUST list outcomes for all expected portal-areas (4 portals × 16 areas). A run that omits any expected area is incomplete and should be flagged. Self-budgeted "skipped (low yield expected)" outcomes are NOT permitted — only the post-hoc 60 min wall-clock kill (`BUDGET-KILL`) is a valid time-based skip.
 - Flats database has new pages for every listing that passed hard filters and survived URL dedup, with `Source=scraped-local` for scraping-origin rows and `Source=email-alert` for alert-origin rows.
 - Dedup-check failures (Notion query errored after 3 retries with exponential backoff) surfaced in the digest under a "Dedup-check failures" section; NO row inserted on fail-closed.
 - Meta database: `last_local_run` stamped on local runs; `last_remote_run` stamped on remote runs.

@@ -77,7 +77,8 @@ Bash dispatches them in order. Each `claude -p` invocation has its own claude.ai
 
 ```
 ~/hunt/run-state/2026-04-28T10-00-00/
-  known_urls.txt          # one URL per line, written by INIT
+  known_urls.txt          # one URL per line, written by INIT, appended-to after every successful insert
+  init.failed             # flag file (only present if INIT failed) — downstream phases check at startup
   alerts.json             # ALERTS phase result
   scrape-rm-primary.json
   scrape-zoopla-primary.json
@@ -88,6 +89,7 @@ Bash dispatches them in order. Each `claude -p` invocation has its own claude.ai
   scrape-sr-secondary.json
   scrape-or-secondary.json
   digest.json             # DIGEST writes a copy of what it sent
+  timings.json            # per-step start/end/duration; appended after each step
   log/
     01-init.log           # full claude stdout, one per step
     02-alerts.log
@@ -147,8 +149,16 @@ URLs:
 
 Known URL set (for O(1) dedup) is in this file:
 {{RUN_STATE_DIR}}/known_urls.txt
-Read it once at start; treat each line as a URL. Skip any candidate
-URL that appears in the set.
+Read it once at start; treat each line as a URL. Re-read the file
+just before each Notion insert to pick up additions made by earlier
+phases of the same run (cheap; small file).
+
+INIT-failure check: if {{RUN_STATE_DIR}}/init.failed exists, write a
+phase-skipped JSON to your output path with all areas set to
+`outcome=SKIPPED-INIT-FAILED, inserted=0` and exit 0. Do NOT call
+notion-create-pages under any circumstances when this flag is
+present. The dedup set cannot be trusted; writing would create
+duplicates.
 
 For each URL in your assigned list:
   1. Run the scraping loop in § Scraping loop.
@@ -158,6 +168,11 @@ For each URL in your assigned list:
   5. Insert qualified rows directly to Notion via
      mcp__claude_ai_Notion__notion-create-pages with
      parent.data_source_id = {{FLATS_DATA_SOURCE_ID}}.
+  6. Immediately after each successful insert, append the listing
+     URL (canonicalised per § TRACKER) to {{RUN_STATE_DIR}}/known_urls.txt
+     with a single newline-terminated write. POSIX guarantees
+     small-write atomicity within a single process; future phases
+     of this run will see the addition on their next read.
 
 REQUIRED OUTPUT: write a JSON file at
 {{RUN_STATE_DIR}}/{{PHASE_NAME}}.json with this shape:
@@ -187,9 +202,15 @@ Two more skeleton files for INIT (`init.txt`), ALERTS (`alerts.txt`), DIGEST (`d
 
 ### Per-step timeout
 
-Each `claude -p` invocation is wrapped in `timeout --signal=TERM --kill-after=30s 15m`. 15 min per step is generous; typical steps run 3–8 min. If a step times out, Bash logs `<phase>: TIMEOUT (15m exceeded)`, writes a placeholder `.json` with `exit_code=124`, and proceeds.
+Each `claude -p` invocation is wrapped in `timeout --signal=TERM --kill-after=30s 25m`. The 25-min figure is a starting estimate (not validated): observed scrape phases on the existing single-skill design have run 30+ min when handling many enrichments, and the 11-step split reduces per-step scope but adds fresh-session cold-start overhead. We measure and tune.
 
-The existing 90 min wrapper-level timeout in `run-hunt.sh` is removed — it's now per-step (effectively 11 × 15 = 165 min upper bound, ~50–75 min typical).
+If a step times out, Bash logs `<phase>: TIMEOUT (25m exceeded)`, writes a placeholder `.json` with `exit_code=124, areas=[]`, and proceeds.
+
+The existing 90 min wrapper-level timeout in `run-hunt.sh` is removed — it's now per-step (effectively 11 × 25 = 275 min upper bound, expected 50–90 min typical).
+
+**Bootstrap retry for the first MCP call**: each step's first 60 seconds are treated as cold-start. If the first MCP call (typically `notion-fetch` or `mcp__playwright__browser_navigate`) fails within those 60s with a connection or auth error, Bash kills the step (within 30s of the failure being detected) and re-runs it once. This catches transient claude.ai connector fetch failures (the same class of issue the existing `run-hunt.sh` health-check loop guards against, but now scoped per-step). Max one retry per step; further failures are recorded as `exit_code=non-zero` and the run continues.
+
+**Timing telemetry**: each step's start/end timestamps and duration are appended to `{{RUN_STATE_DIR}}/timings.json`. After 3–5 real runs, we tune the 25-min figure based on observed p95 cold-start + work duration.
 
 ### Failure handling
 
@@ -283,14 +304,25 @@ The Notion tracker is the source of truth for inserted listings. The `*.json` fi
 | Failure                                | Behavior                                                                |
 |----------------------------------------|-------------------------------------------------------------------------|
 | Step exits non-zero                    | Log `<phase>: FAILED exit=<rc>`, placeholder `.json`, continue          |
-| Step exceeds 15-min timeout            | `kill -TERM` + 30s grace then SIGKILL, placeholder `.json`, continue    |
-| Step writes invalid JSON               | DIGEST treats as failed phase, surfaces in `## Failed phases`           |
-| INIT fails                             | Subsequent scrape steps still run with empty `known_urls.txt` (degraded mode — risk of duplicate rows; DIGEST flags this) |
-| Notion MCP outage                      | Detected by INIT's first call; INIT writes `outage.flag`, all subsequent steps no-op + log; DIGEST writes a "Notion unavailable, run aborted" email if it runs at all |
-| Playwright unavailable                 | First scrape step's Playwright probe fails; that step writes `outcome=BLOCKED` for all its areas; subsequent scrape steps re-probe and likely also fail; DIGEST flags scraping unavailable |
-| `xvfb-run` itself fails                | Bash detects the unusual exit signature; logs and proceeds with whatever steps can run (alerts, digest) without Playwright |
+| Step exceeds 25-min timeout            | `kill -TERM` + 30s grace then SIGKILL, placeholder `.json`, continue    |
+| Step writes invalid JSON               | Bash detects (json parse fails or area count mismatch — see § Bash-side completeness validation); marks phase as INVALID in cron.log; DIGEST surfaces in `## Failed phases` |
+| Step's first MCP call fails within 60s | One retry; further failures → exit_code logged, continue (see § Bootstrap retry above) |
+| **INIT fails (any reason)**            | **Bash writes `init.failed` flag in run-state dir. Every downstream phase reads the flag at startup and exits with `outcome=SKIPPED-INIT-FAILED` for all assigned areas, writes ZERO Notion rows. Fail-closed: better to skip a day than create duplicate rows when dedup is unreliable.** DIGEST surfaces the run-aborted state prominently in the email. |
+| Notion MCP outage                      | INIT's first call fails → falls under "INIT fails" above (init.failed flag → all phases no-op). |
+| Playwright unavailable                 | Scrape phases probe Playwright at start; if probe fails, write `outcome=BLOCKED` for all assigned areas, exit cleanly. ALERTS and DIGEST still run (they don't need Playwright). |
+| `xvfb-run` itself fails                | Bash detects the unusual exit signature; logs and proceeds with whatever steps can run (alerts, digest) without Playwright. |
 
-The pattern: every failure produces a structured outcome rather than aborting the run.
+The pattern: every failure produces a structured outcome rather than aborting the run. INIT failure is the one exception — it triggers fail-closed on all writes because dedup is the only correctness guarantee against duplicate rows.
+
+### Bash-side completeness validation
+
+After each phase exits, before moving to the next, Bash performs three independent checks (the model's self-report in the JSON is **not** trusted as the only signal):
+
+1. **JSON parse**: `jq . <phase>.json > /dev/null`. If parse fails, mark phase INVALID.
+2. **Area-count match**: for scrape phases, the input URL count is known to Bash (it generated the prompt). The output `areas[]` array length must match exactly. If shorter, the phase silently dropped areas; mark INVALID and emit the missing area names to cron.log.
+3. **Outcome enum**: each `areas[*].outcome` must be in the documented enum (`OK | EARLY-EXIT | BLOCKED | TIMEOUT | ZERO-RESULTS | SKIPPED-INIT-FAILED`). Out-of-vocabulary values mark INVALID.
+
+This addresses the per-area dropping case: a subagent that "claims OK" without producing the full list of areas is caught by check 2. **It does NOT catch per-listing under-enrichment within an area** — that remains a model-trust gap. If observed in practice, the future redesign is to have Bash extract listing URLs itself (deterministic curl + portal-specific regex on search pages) and dispatch enrichment-only subagents with explicit one-URL-per-subagent scope. See § 9 Open questions.
 
 ---
 
@@ -329,10 +361,15 @@ Implementation plan (the next document) will break each into bite-sized tasks.
 
 ## 9. Open questions / future work
 
+- **Per-listing under-enrichment** is the residual model-trust gap not addressed by this design. The Bash-side completeness validation (§ 6) catches per-area dropping but not "subagent ran 4 of 6 listings within an area, marked the area OK". If observed in practice (telltales: low enrichment counts despite high `inserted` counts in the per-area accounting), the structural fix is to split the LLM's job further:
+  - **Bash extracts listing URLs** itself from each search page using `curl` + portal-specific regex (Rightmove: `/properties/\d+`, Zoopla: `/to-rent/details/\d+/`, etc). No model judgment, no skipping possible.
+  - **LLM is only used for per-listing enrichment** — one subagent per listing URL, with Playwright + photos + floorplan as the only task. Verification trivial: did the listing get a Notion row or not.
+  This is a meaningful redesign — probably 2-3x the work of the current spec — and is not built day one. Codex's high-severity finding on self-attestation correctly notes this as a residual risk; we accept it for now and will revisit if the symptoms persist.
 - **Run-state dir compaction.** 14-day retention is a guess; if dir count balloons we'll cap at N runs instead.
-- **Phase-split for enrichment** (option A2 from brainstorming). If a single portal-tier subagent handling 6–8 areas + per-listing enrichment becomes the new bottleneck (e.g., one subagent runs 30 min and times out), we'll split scraping into "search" (per-portal-tier) and "enrich" (batches of N listings). Not built day one.
+- **Phase-split for enrichment** (option A2 from brainstorming). Related to the per-listing concern above; if a single portal-tier subagent handling 6–8 areas + per-listing enrichment becomes the new bottleneck (e.g., one subagent runs 30 min and times out), we split scraping into "search" (per-portal-tier) and "enrich" (batches of N listings). Same direction as the deeper redesign.
 - **Areas.json self-healing.** When a portal changes its URL scheme (Zoopla has churned 3 times in two weeks), the orchestrator could detect ZERO-RESULTS across all areas of a portal and fire a "discovery" subagent to find the new pattern. Day-two enhancement.
 - **Cost telemetry.** Track per-step input/output tokens and aggregate per-run cost. Useful for tuning timeouts and detecting prompt-size regressions.
+- **25-min per-step timeout is unmeasured.** Starting estimate; tune from `timings.json` after 3–5 real runs.
 
 ---
 
@@ -341,3 +378,7 @@ Implementation plan (the next document) will break each into bite-sized tasks.
 - **2026-04-27**: chose option A (externally orchestrate scraping only — INIT/alerts/digest stay in their own claude invocations) over option C (post-run validator with fixup), because every observed run skips something, so C ends up being A with extra detection ceremony.
 - **2026-04-27**: chose granularity A1 (8 portal-tier subagents) over A2 (phase-split search/enrich) and A3 (4 portal subagents). A1 mirrors the existing skill structure (cheap migration), 6–8 areas per subagent is small enough that skipping is structurally hard, and A2's phase-split adds new moving parts we don't need yet.
 - **2026-04-27**: file-based state (run-state dir + json + log files) over stdout parsing. LLM stdout is unreliable; file-based gives Bash a clean contract and gives humans an audit trail.
+- **2026-04-27 (post-codex-review)**: dedup is now append-as-you-insert. Each phase appends inserted URLs to `known_urls.txt` immediately after each successful Notion write. Closes the codex critical-1 finding (stale dedup state across phases).
+- **2026-04-27 (post-codex-review)**: INIT failure is now fail-closed. `init.failed` flag → all downstream phases exit with `SKIPPED-INIT-FAILED` and zero Notion writes. Closes the codex critical-2 finding (fail-open posture).
+- **2026-04-27 (post-codex-review)**: Bash-side completeness validation (JSON parse + area-count match + outcome-enum check) added in §6. Closes the codex high-severity finding partially — catches per-area dropping but not per-listing under-enrichment. The residual risk is acknowledged in § 9; structural fix (Bash extracts URLs, LLM enriches one-at-a-time) deferred until observed in practice.
+- **2026-04-27 (post-codex-review)**: per-step timeout 15 → 25 min, with per-step timing telemetry to `timings.json` and bounded retry on first-MCP-call cold-start failures. Closes the codex high-severity finding on the unvalidated 15-min budget.

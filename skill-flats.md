@@ -75,7 +75,14 @@ Modifiers:
 - Unfurnished or part-furnished: +0.5
 - Rent above £[FLAT_BUDGET_SWEET_MAX] and up to £[FLAT_BUDGET_HARD_CAP]: −[FLAT_STRETCH_PENALTY]
 - **Carpet detected in living/bedroom photo: −1.** Confirmed carpet (not wood/tile/vinyl) in living areas drove multiple human LOW labels with rationales like "Weird space, carpet" / "Carpet in rooms".
-- **Open-plan kitchen detected: +1.** Kitchen visible from / pass-through to living area is a strong positive signal — the only HIGH-rationale verbatim was "real open kitchen and big living room". Closed/separated kitchen is neutral (no penalty), but record in Reason as `closed-kitchen` for transparency.
+- **Open-plan kitchen detected: +2.** Kitchen visible from / pass-through to living area is the strongest positive HIGH signal across labeled data. The user's verbatim HIGH rationale was "real open kitchen and big living room"; both unique HIGHs in the labeled set have `open-kitchen✓` in their Reason. Closed/separated kitchen is neutral (no penalty), but record in Reason as `closed-kitchen` for transparency. (Bumped from +1 → +2 after the second labeling pass confirmed this is a defining HIGH criterion.)
+- **Tube proximity** (extracted during enrichment — see § Tube proximity extraction below):
+  - ≤5 min walk to nearest tube/Overground station: **+1**
+  - 5–10 min walk: **0**
+  - 10–15 min walk: **−1**
+  - >15 min walk: **−2**
+  - Distance unknown / not stated: **0** (don't penalise; many listings omit it)
+  - Append the resolved bucket to Reason as `tube-close` / `tube-mid` / `tube-far` / `tube-very-far` / `tube-unknown`. Multiple human LOW rationales cited "tube too far" / "way too far from tube" (Tower Bridge Rd, Courtauld Rd, Bridport Place); this signal is heavily weighted because it materially affects daily commute quality.
 - **Noise hotspot match: −2 AND force `Calm=No`.** If the listing title, address, or description contains any substring from `[FLAT_NOISE_HOTSPOTS]` (case-insensitive), apply this penalty. Default hotspots (overridable in config): `Arsenal`, `Emirates Stadium`, `Highbury Stadium Square`, `Drayton Park`, `Wembley`, `White Hart Lane`, `Tottenham Hotspur`. These mark properties in immediate proximity to major venues / arenas where match-day disruption is significant. The user verbatim downgraded a Queensland Rd Arsenal listing from HIGH to MEDIUM citing "right next to the arsenal stadium, will be hell of disruption and noise" — this rule operationalises that.
 - **Availability-window alignment** (anchor: [MOVE_IN_DATE], parsed as `MOVE_IN_TARGET` = the first of [MOVE_IN_MONTH] in the year given, e.g. "early June 2026" → 2026-06-01; "mid June 2026" → 2026-06-15):
   - Available From within `[MOVE_IN_TARGET − 14d, MOVE_IN_TARGET + 14d]`: **+1** (sweet spot)
@@ -86,11 +93,21 @@ Modifiers:
   - Append the resolved bucket to Reason as `avail-aligned` / `avail-early` / `avail-very-early` / `avail-late` / `avail-unknown` for transparency.
 
 Tiers:
-- HIGH: score ≥ [FLAT_TIER_HIGH_THRESHOLD] **AND `Size Source ∈ {stated-text, floorplan}`**. The size-verified gate is required for auto-HIGH because human review consistently downgrades unverified-size listings ("No plan", "info on plans picture" appeared as LOW rationales on auto-HIGH-scored rows). If score ≥ HIGH threshold but size is inferred/unknown → tier MEDIUM, append `unverified-size` to Needs-verify.
-- MEDIUM: [FLAT_TIER_MEDIUM_THRESHOLD] ≤ score < [FLAT_TIER_HIGH_THRESHOLD], OR (score ≥ HIGH threshold but size is unverified).
-- LOW: score < [FLAT_TIER_MEDIUM_THRESHOLD]
 
-**Cap:** size-unknown 1-beds (SIZE RESOLUTION rule 5 above) → tier cannot exceed MEDIUM even if score ≥ HIGH threshold (this is a stricter form of the auto-HIGH gate, kept for clarity).
+Auto-HIGH requires score ≥ [FLAT_TIER_HIGH_THRESHOLD] **AND** all of the gates below. Failing any gate → cap at MEDIUM (append the relevant flag to Needs-verify for transparency). The cumulative gate set:
+
+1. **Size verified**: `Size Source ∈ {stated-text, floorplan}`. Inferred / unknown sizes get `unverified-size` flag and MEDIUM cap. Rationale: human review consistently downgrades unverified-size listings ("No plan", "info on plans picture" appeared as LOW rationales on multiple auto-HIGH-scored rows).
+2. **Availability aligned**: `Available From ≤ MOVE_IN_TARGET + 14 days` OR Available From unknown. Listings with stated availability more than 14 days after the move-in target → cap MEDIUM with `avail-too-late` flag. Rationale: a Sept-availability HIGH-scored listing got user-downgraded to MEDIUM ("agent ping suggested for date conflict"); the −2 score penalty wasn't enough to drop it from HIGH alone.
+3. **1-bed-specific HIGH gates** (in addition to the above):
+   - Verified size **≥ 60 m²** (not just ≥55, the hard-reject floor). 1-beds with verified size in [55, 60) m² → cap MEDIUM with `1bed-borderline-size` flag.
+   - **Open-plan kitchen detected** (`open_kitchen=true` from § VISUAL EXTRACTION — PHOTOS). 1-beds without confirmed open-plan kitchen → cap MEDIUM with `1bed-no-open-kitchen` flag. Rationale: user verbatim said they'd accept a 1-bed only if it's "big with open kitchen/living"; every auto-MEDIUM 1-bed with `open-kitchen✓` and unverified size has been LOW-labeled by the user, so without confirming open-kitchen we can't justify HIGH for any 1-bed.
+
+Tiers (after gates):
+- **HIGH**: score ≥ [FLAT_TIER_HIGH_THRESHOLD] AND all gates pass.
+- **MEDIUM**: [FLAT_TIER_MEDIUM_THRESHOLD] ≤ score < [FLAT_TIER_HIGH_THRESHOLD], OR (score ≥ HIGH threshold but at least one gate failed).
+- **LOW**: score < [FLAT_TIER_MEDIUM_THRESHOLD].
+
+**Hard cap (still in place):** size-unknown 1-beds (SIZE RESOLUTION rule 5 above) — tier cannot exceed MEDIUM. Subsumed by gate 1 + gate 3a above, but kept as belt-and-braces for clarity.
 
 ## INIT — LOAD KNOWN URL SET (runs once, before any ingestion)
 
@@ -288,6 +305,7 @@ Run after primary areas complete. Same URL patterns as above; only the area slug
       - **title or description matches `\bstudio\b`** (case-insensitive, word-boundary) — see § HARD FILTERS
       If any fails → skip this listing entirely, no visual extraction. (Note: "obviously dated/unrenovated" is NOT a cheap filter for RM/Zoopla — photos now provide the New/Renovated signal via step 7g, and § SCORING already penalizes dated listings.)
    d. **Description-text size pass (cheap, runs before floorplan navigation):** if the structured JSON has no sensible size, scan the description body with the regex patterns in § SIZE RESOLUTION rule 3. If a hit is found, record it as `_descriptionSize` with `Size Source=stated-text` for the merge step (7g). Don't reject yet — let the floorplan pass run too, and the merge will pick the best source.
+   d2. **Tube-proximity pass (cheap, text scan):** see § Tube proximity extraction below. Scan the description / title / key features for nearest-station + walk-distance phrasing. Record the resolved bucket (≤5min / 5–10min / 10–15min / >15min / unknown) for the scoring step. This is a text-only pass; no Playwright needed.
    e. **Size-gate check:** if a sensible size is now known (from structured JSON or step 7d description regex) AND it is below [FLAT_SIZE_FLOOR_M2] → reject immediately, no visual extraction. **Additional 1-bed gate:** if beds=1 AND the verified size (`stated-text` or `floorplan` from any prior step) is < 55 m² → reject (per § HARD FILTERS).
    f. **Floorplan pass (Rightmove / Zoopla only, if floorplan URL exists):** see § VISUAL EXTRACTION — FLOORPLAN below.
    g. **Photo pass (Rightmove / Zoopla only, if listing photos exist):** see § VISUAL EXTRACTION — PHOTOS below.
@@ -359,6 +377,35 @@ This section is called from enrichment step 7g. It runs for Rightmove and Zoopla
 3. Consolidate across all photos: for each field (bathtub, wood floor, light, new/renovated, carpet, open_kitchen), if any photo yielded a definitive "Yes"/"No"/`true`/`false`, use that. If multiple photos disagree, prefer "Yes"/`true` over "No"/`false` for positive signals (bathtub, wood, open_kitchen — the negative photo might show a different room). For carpet, conservative rule: only mark `carpet=true` if it appears in 2+ room photos OR if a single living-area photo clearly shows carpet (avoid false positives from one bedroom photo). If all photos yielded "Unknown"/`null`, keep "Unknown"/`null`.
 
 4. Return the consolidated values (bathtub, wood_floor, light, new_renovated, carpet, open_kitchen) to the merge step (7g). The carpet and open_kitchen booleans feed the scoring modifiers in § SCORING and should be appended to the Reason text as `carpet✓` / `open-kitchen✓` / `closed-kitchen` for transparency. They do NOT need separate Notion columns — the score and Reason capture the signal.
+
+### Tube proximity extraction
+
+This section is called from enrichment step 7d2. It runs for every portal (Rightmove, Zoopla, OpenRent, SpareRoom). Pure text scan — no Playwright, no extra navigation.
+
+1. Combine into a single text blob: title, structured JSON description, key features list, and any "transport" / "location" section text from the listing page snapshot.
+
+2. Search the blob for nearest-station + walk-distance patterns. Common phrasings:
+   - `"<N> minute walk(s)? (?:to|from) <Station> (?:tube|station|underground|Overground|DLR)"`
+   - `"<N> mins to <Station>"`
+   - `"<Station> (?:tube|station|underground) is (?:just )?<N> minutes(?: walk)?"`
+   - `"a <N>-minute walk to <Station>"`
+   - `"<Station> \\([Nn] mins?\\)"` (parenthetical format used by some agents)
+   - Look for any of: "tube", "underground", "Overground", "Crossrail", "Elizabeth", "DLR" near a number-of-minutes mention.
+
+3. If multiple matches exist (listing mentions several stations), pick the SMALLEST walk-distance number — the closest station is the relevant one for daily commute.
+
+4. Resolve to a bucket:
+   - 1–5 minutes → bucket `tube-close`
+   - 6–10 minutes → bucket `tube-mid`
+   - 11–15 minutes → bucket `tube-far`
+   - 16+ minutes → bucket `tube-very-far`
+   - No match found → bucket `tube-unknown`
+
+5. Record the bucket and the matched station name (for the Reason text) into the listing record. The scoring step 7j will apply the modifier per § SCORING.
+
+6. Special-case: some agents say "minutes from the heart of [area]" rather than minutes-from-station. Ignore those (they're area-centric, not station-centric). Only count phrasings that explicitly reference a tube/Overground/rail station.
+
+7. If the description doesn't mention any station but the listing's address includes a known central postcode (EC1V, N1, WC1H etc.), do NOT infer proximity — leave `tube-unknown`. Postcode-based inference is too noisy.
 
 ### Pagination cutoff (per portal-area)
 

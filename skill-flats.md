@@ -91,6 +91,13 @@ Modifiers:
   - Available From `> MOVE_IN_TARGET + 14d` (later than the move-in target — would force temp housing): **−2**
   - Available From unknown / not stated: **0** (don't penalise; many listings don't surface this in structured JSON, leave for human review)
   - Append the resolved bucket to Reason as `avail-aligned` / `avail-early` / `avail-very-early` / `avail-late` / `avail-unknown` for transparency.
+- **Green-space proximity** (extracted during enrichment — see § Green-space proximity extraction below):
+  - Confirmed walk-distance ≤ 5 min to a named big park (Regent's Park, Hampstead Heath, Highbury Fields, Clissold Park, Victoria Park, Hyde Park, or any other entry in `[FLAT_GREEN_FEATURES]`): **+1**, bucket `park-close`
+  - Confirmed canal-side / canal view / walk-distance ≤ 3 min to the canal: **+1**, bucket `canal-close`
+  - Both park-close AND canal-close: **+1.5** (cap, NOT additive — this overrides the two `+1`s above), bucket `park-and-canal`
+  - Postcode/street fallback only (matched against `[FLAT_GREEN_FEATURES]` without an explicit walk-distance in the description): **+0.5**, bucket `green-adjacent`
+  - No green-feature signal: **0**, bucket `green-none`
+  - Append the resolved bucket to Reason as `park-close[<name>]` / `canal-close` / `park-and-canal[<park-name>+canal]` / `green-adjacent[<feature-name>]` / `green-none` for transparency. Multiple user signals in labeled data ("near Highbury Fields", "canal-side") and the user verbatim asked for "closeness to a big park, and/or canal, for walks/runs" — this is a meaningful daily-life criterion.
 
 Tiers:
 
@@ -101,13 +108,17 @@ Auto-HIGH requires score ≥ [FLAT_TIER_HIGH_THRESHOLD] **AND** all of the gates
 3. **1-bed-specific HIGH gates** (in addition to the above):
    - Verified size **≥ 60 m²** (not just ≥55, the hard-reject floor). 1-beds with verified size in [55, 60) m² → cap MEDIUM with `1bed-borderline-size` flag.
    - **Open-plan kitchen detected** (`open_kitchen=true` from § VISUAL EXTRACTION — PHOTOS). 1-beds without confirmed open-plan kitchen → cap MEDIUM with `1bed-no-open-kitchen` flag. Rationale: user verbatim said they'd accept a 1-bed only if it's "big with open kitchen/living"; every auto-MEDIUM 1-bed with `open-kitchen✓` and unverified size has been LOW-labeled by the user, so without confirming open-kitchen we can't justify HIGH for any 1-bed.
+4. **Not fully furnished**: `Furnished ∈ {Part, Unfurnished, Unknown}`. Listings explicitly marked `Furnished` cap at MEDIUM with `furnished` flag in Reason. `Unknown` is permissive — most agents skip the field; we don't penalise that. Rationale: the user's first applied flat (Pewter Court, N7, 2026-04-29) was fully furnished and on viewing turned out to be dirty plus had a second bed where the user's desk was meant to go; landlord refused to remove furniture. Furnished is a strong correlate of "no room for desk" and "more stuff than wanted" failure modes.
 
 Tiers (after gates):
-- **HIGH**: score ≥ [FLAT_TIER_HIGH_THRESHOLD] AND all gates pass.
-- **MEDIUM**: [FLAT_TIER_MEDIUM_THRESHOLD] ≤ score < [FLAT_TIER_HIGH_THRESHOLD], OR (score ≥ HIGH threshold but at least one gate failed).
+- **HIGH**: score ≥ [FLAT_TIER_HIGH_THRESHOLD] AND **zero** gates failed.
+- **WORTH-CHECKING**: score ≥ [FLAT_TIER_HIGH_THRESHOLD] AND **1 or 2** gates failed. The Reason text MUST include `unlock-by: <comma-separated gate names>` listing exactly which gates failed (use names like `verified-size`, `avail-aligned`, `1bed-size-≥60m²`, `1bed-open-kitchen`, `not-furnished`). Rationale: high-potential listings with one or two unverified signals deserve their own visibility — they sit between "definitely act now" and "uncertain and middling". WORTH-CHECKING listings get an outreach .txt file generated (see § OUTREACH), same as HIGH.
+- **MEDIUM**: any of: `[FLAT_TIER_MEDIUM_THRESHOLD] ≤ score < [FLAT_TIER_HIGH_THRESHOLD]`; OR (score ≥ HIGH threshold AND **3 or more** gates failed — too uncertain to highlight).
 - **LOW**: score < [FLAT_TIER_MEDIUM_THRESHOLD].
 
-**Hard cap (still in place):** size-unknown 1-beds (SIZE RESOLUTION rule 5 above) — tier cannot exceed MEDIUM. Subsumed by gate 1 + gate 3a above, but kept as belt-and-braces for clarity.
+The "1–2 vs 3+ failed gates" boundary is intentionally absolute (not relative to active gate count). 2-beds have 3 active gates (1, 2, 5); 1-beds have 5 (1, 2, 3, 4, 5). The asymmetric uncertainty is accepted; tune from observation if the WORTH-CHECKING bucket grows misshapen.
+
+**Hard cap (still in place):** size-unknown 1-beds (SIZE RESOLUTION rule 5 above) — tier cannot exceed MEDIUM. Subsumed by gate 1 + gate 3 above, but kept as belt-and-braces for clarity.
 
 ## INIT — LOAD KNOWN URL SET (runs once, before any ingestion)
 
@@ -306,6 +317,7 @@ Run after primary areas complete. Same URL patterns as above; only the area slug
       If any fails → skip this listing entirely, no visual extraction. (Note: "obviously dated/unrenovated" is NOT a cheap filter for RM/Zoopla — photos now provide the New/Renovated signal via step 7g, and § SCORING already penalizes dated listings.)
    d. **Description-text size pass (cheap, runs before floorplan navigation):** if the structured JSON has no sensible size, scan the description body with the regex patterns in § SIZE RESOLUTION rule 3. If a hit is found, record it as `_descriptionSize` with `Size Source=stated-text` for the merge step (7g). Don't reject yet — let the floorplan pass run too, and the merge will pick the best source.
    d2. **Tube-proximity pass (cheap, text scan):** see § Tube proximity extraction below. Scan the description / title / key features for nearest-station + walk-distance phrasing. Record the resolved bucket (≤5min / 5–10min / 10–15min / >15min / unknown) for the scoring step. This is a text-only pass; no Playwright needed.
+   d3. **Green-space proximity pass (cheap, text scan + postcode fallback):** see § Green-space proximity extraction below. Scan title/description/key-features for park/canal mentions with optional walk-distance, then fall back to matching the listing's postcode and address against `[FLAT_GREEN_FEATURES]` config. Record the resolved bucket (`park-close` / `canal-close` / `park-and-canal` / `green-adjacent` / `green-none`) for the scoring step. Text-only pass; no Playwright needed.
    e. **Size-gate check:** if a sensible size is now known (from structured JSON or step 7d description regex) AND it is below [FLAT_SIZE_FLOOR_M2] → reject immediately, no visual extraction. **Additional 1-bed gate:** if beds=1 AND the verified size (`stated-text` or `floorplan` from any prior step) is < 55 m² → reject (per § HARD FILTERS).
    f. **Floorplan pass (Rightmove / Zoopla only, if floorplan URL exists):** see § VISUAL EXTRACTION — FLOORPLAN below.
    g. **Photo pass (Rightmove / Zoopla only, if listing photos exist):** see § VISUAL EXTRACTION — PHOTOS below.
@@ -407,6 +419,37 @@ This section is called from enrichment step 7d2. It runs for every portal (Right
 
 7. If the description doesn't mention any station but the listing's address includes a known central postcode (EC1V, N1, WC1H etc.), do NOT infer proximity — leave `tube-unknown`. Postcode-based inference is too noisy.
 
+### Green-space proximity extraction
+
+This section is called from enrichment step 7d3. It runs for every portal (Rightmove, Zoopla, OpenRent, SpareRoom). Pure text scan plus a postcode/street fallback against `[FLAT_GREEN_FEATURES]` config. No Playwright, no extra navigation.
+
+1. Combine into a single text blob: title, structured JSON description, key features list, and any "transport"/"location"/"about-the-area" section text from the listing page snapshot.
+
+2. **Text scan for explicit walk-distances and named features.** Search for:
+   - `(\d+)\s*min(?:s|ute(?:s)?)?\s*walk\s*to\s*(?P<feature>[A-Z][\w'\s]+(?:Park|Heath|Fields|Common|Gardens|Canal))` — explicit walk-time + feature
+   - `(\d+)\s*mins?\s*to\s*(?P<feature>[A-Z][\w'\s]+(?:Park|Heath|Fields|Common|Gardens|Canal))`
+   - `(?:near|adjacent\s+to|overlooks)\s+(?P<feature>[A-Z][\w'\s]+(?:Park|Heath|Fields|Common|Gardens|Canal))` — near-mention without walk-time
+   - `canal[-\s]?side` / `canal\s+view` / `overlooks\s+(?:the\s+)?(?:Regent'?s\s+)?Canal` / `(?:on|by)\s+the\s+(?:Regent'?s\s+)?Canal`
+   - `(\d+)\s*min(?:s)?\s*to\s+(?:the\s+)?canal`
+
+3. **Postcode/street fallback.** Parse `[FLAT_GREEN_FEATURES]` config. Each entry has the format `<type>:<name>:<comma-separated postcode prefixes or street names>`, where `<type>` is `park` or `canal`. For each entry:
+   - If the listing's postcode starts with any of the entry's postcode prefixes (longest-prefix match wins), record a fallback hit on that feature.
+   - If the listing's address contains any of the entry's street names (case-insensitive substring match), record a fallback hit.
+
+4. **Resolve to a bucket** (priority order — first match wins):
+   - Text scan found a park with explicit walk-time ≤5 min AND text scan found canal-side/canal-view OR canal walk ≤3 min → bucket `park-and-canal`
+   - Text scan found a park with explicit walk-time ≤5 min → bucket `park-close`
+   - Text scan found canal-side/canal-view OR canal walk ≤3 min → bucket `canal-close`
+   - Text scan found "near/adjacent/overlooks <Park>" without walk-time, OR postcode/street fallback matched a park entry → bucket `green-adjacent` (downgrade from `park-close` because we don't have walk-time confidence)
+   - Postcode/street fallback matched a canal entry only → bucket `green-adjacent`
+   - No matches → bucket `green-none`
+
+5. Record the bucket and the matched feature name(s) into the listing record. The scoring step 7j applies the modifier per § SCORING. Append annotation to Reason text in the formats specified in § SCORING modifiers (e.g. `park-close[Highbury Fields]`, `canal-close`, `park-and-canal[Regent's Park+canal]`, `green-adjacent[Vincent Terrace canal]`, `green-none`).
+
+6. Special-case: ignore generic phrasings like "minutes from the heart of <Area>" — they're area-centric, not feature-centric. Only count text-scan matches that explicitly reference a park/heath/fields/common/gardens/canal name.
+
+7. Special-case: postcode prefixes in `[FLAT_GREEN_FEATURES]` are deliberately broad (e.g., `NW1 5` covers a chunk of Regent's Park's edge but also stretches further). The fallback bucket `green-adjacent` is intentionally low-weight (+0.5) to limit damage from over-broad postcode matches. The text scan handles tighter "5 min walk" cases when the agent bothered to mention them.
+
 ### Pagination cutoff (per portal-area)
 
 Paginate to page 2, then page 3, capped at 3 pages total, subject to this early-exit rule:
@@ -504,7 +547,7 @@ Always create a draft, even on zero new listings — confirms pipeline ran.
 
 ## OUTREACH
 
-Save .txt files for HIGH priority to [YOUR_HUNT_DIR]/outreach/YYYY-MM-DD_{slug}.txt
+Save .txt files for HIGH or WORTH-CHECKING priority to [YOUR_HUNT_DIR]/outreach/YYYY-MM-DD_{slug}.txt. Both tiers warrant same-day contact: HIGH because they're our strongest auto-shortlist; WORTH-CHECKING because they'd be HIGH if we could verify 1–2 missing signals (size, open-kitchen, etc.) and the answer often comes from a quick agent ping. The outreach file body is the same template for both tiers.
 
 Template (agent-facing, <100 words):
 """
@@ -540,7 +583,10 @@ Insert ONE sentence of personalisation between the greeting and the self-intro i
 - Carpet / open-kitchen booleans surfaced in Reason text on every Rightmove/Zoopla row that ran photo extraction.
 - For Rightmove/Zoopla scraped listings with floorplan images, `Size Source = floorplan` should appear on the majority of new rows. If consistently low, investigate whether floorplan URL extraction or screenshot reading is failing silently.
 - Visual extraction (floorplan + photos) attempted for every new Rightmove/Zoopla listing that passes cheap hard filters. Digest records count of successful floorplan reads vs. total attempts.
-- Outreach .txt files saved for HIGH priority (local mode only).
+- Outreach .txt files saved for HIGH AND WORTH-CHECKING priority (local mode only). The WORTH-CHECKING tier covers listings that scored ≥ HIGH threshold but had 1–2 unverified gates (size, open-kitchen, avail-aligned, not-furnished); they're worth same-day contact too.
+- Furnished gate respected: listings explicitly `Furnished` cap at MEDIUM; no auto-HIGH for fully-furnished.
+- Green-space proximity scored: every Rightmove/Zoopla/OpenRent/SpareRoom listing has a `park-close` / `canal-close` / `park-and-canal` / `green-adjacent` / `green-none` bucket appended to Reason.
+- WORTH-CHECKING listings include `unlock-by: <gate-list>` annotation in Reason so the user can see at a glance which signals would need verifying.
 - Email draft created (local mode: Send directly if Playwright navigates to Gmail to click send; remote mode: leave as draft for the Apps Script auto-sender).
 ```
 

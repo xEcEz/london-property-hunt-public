@@ -170,6 +170,22 @@ Listings whose title / address / description matches any of these substrings (ca
 FLAT_NOISE_HOTSPOTS=Arsenal, Emirates Stadium, Highbury Stadium Square, Drayton Park, Wembley, White Hart Lane, Tottenham Hotspur
 ```
 
+### Green-space features (proximity scoring — parks and canal)
+
+Listings whose description mentions or whose postcode/street matches one of these features get a scoring bonus and an annotation in the Reason text. Each line follows the format `<type>:<name>:<comma-separated postcode prefixes or street names>`, where `<type>` is `park` or `canal`. The skill's text scan handles explicit "5 min walk to <Park>" cases on top of this list; this list is the postcode/street fallback for listings where the agent didn't bother to mention the feature.
+
+```
+FLAT_GREEN_FEATURES=
+  park:Regent's Park:NW1 4,NW1 5,NW1 6,NW1 7
+  park:Highbury Fields:N5 1,N5 2,N5 3
+  park:Hampstead Heath:NW3 1,NW3 2,NW3 5,NW3 7,NW5 1,N6 4
+  park:Clissold Park:N16 0,N16 9
+  park:Victoria Park:E2 9,E3 5,E9 5,E9 7
+  park:Hyde Park:W1J,W2 2,SW1X
+  canal:Regent's Canal:N1 7,N1 8,NW1 8,E2 8,E8 4
+  canal:Regent's Canal towpath addresses:Vincent Terrace,Noel Rd,Wharf Rd,Baltic Pl,Wenlock Basin,Battlebridge Basin
+```
+
 ### Scoring weights (overrides — defaults in skill-flats.md)
 
 ```

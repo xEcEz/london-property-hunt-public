@@ -78,11 +78,11 @@ Modifiers:
 - **Open-plan kitchen detected: +2.** Kitchen visible from / pass-through to living area is the strongest positive HIGH signal across labeled data. The user's verbatim HIGH rationale was "real open kitchen and big living room"; both unique HIGHs in the labeled set have `open-kitchen✓` in their Reason. Closed/separated kitchen is neutral (no penalty), but record in Reason as `closed-kitchen` for transparency. (Bumped from +1 → +2 after the second labeling pass confirmed this is a defining HIGH criterion.)
 - **Tube proximity** (extracted during enrichment — see § Tube proximity extraction below):
   - ≤5 min walk to nearest tube/Overground station: **+1**
-  - 5–10 min walk: **0**
-  - 10–15 min walk: **−1**
-  - >15 min walk: **−2**
+  - 6–10 min walk: **−0.5** (small penalty — manageable but not ideal)
+  - 11–15 min walk: **−1.5**
+  - >15 min walk: **−2.5**
   - Distance unknown / not stated: **0** (don't penalise; many listings omit it)
-  - Append the resolved bucket to Reason as `tube-close` / `tube-mid` / `tube-far` / `tube-very-far` / `tube-unknown`. Multiple human LOW rationales cited "tube too far" / "way too far from tube" (Tower Bridge Rd, Courtauld Rd, Bridport Place); this signal is heavily weighted because it materially affects daily commute quality.
+  - Append the resolved bucket to Reason as `tube-close` / `tube-mid` / `tube-far` / `tube-very-far` / `tube-unknown`. Multiple human LOW rationales cited "tube too far" / "way too far from tube" / "far from tube" (Tower Bridge Rd, Courtauld Rd, Bridport Place, Digby Crescent N4 at 10min). Bucket weights tightened 2026-04-30 after Digby Crescent at 10min walk was Human-Tier'd LOW despite auto-scoring HIGH — the previous "0 penalty for 6-10 min" band masked the user's actual preference for sub-5-min walks.
 - **Noise hotspot match: −2 AND force `Calm=No`.** If the listing title, address, or description contains any substring from `[FLAT_NOISE_HOTSPOTS]` (case-insensitive), apply this penalty. Default hotspots (overridable in config): `Arsenal`, `Emirates Stadium`, `Highbury Stadium Square`, `Drayton Park`, `Wembley`, `White Hart Lane`, `Tottenham Hotspur`. These mark properties in immediate proximity to major venues / arenas where match-day disruption is significant. The user verbatim downgraded a Queensland Rd Arsenal listing from HIGH to MEDIUM citing "right next to the arsenal stadium, will be hell of disruption and noise" — this rule operationalises that.
 - **Availability-window alignment** (anchor: [MOVE_IN_DATE], parsed as `MOVE_IN_TARGET` = the first of [MOVE_IN_MONTH] in the year given, e.g. "early June 2026" → 2026-06-01; "mid June 2026" → 2026-06-15):
   - Available From within `[MOVE_IN_TARGET − 14d, MOVE_IN_TARGET + 14d]`: **+1** (sweet spot)
@@ -109,6 +109,13 @@ Auto-HIGH requires score ≥ [FLAT_TIER_HIGH_THRESHOLD] **AND** all of the gates
    - Verified size **≥ 60 m²** (not just ≥55, the hard-reject floor). 1-beds with verified size in [55, 60) m² → cap MEDIUM with `1bed-borderline-size` flag.
    - **Open-plan kitchen detected** (`open_kitchen=true` from § VISUAL EXTRACTION — PHOTOS). 1-beds without confirmed open-plan kitchen → cap MEDIUM with `1bed-no-open-kitchen` flag. Rationale: user verbatim said they'd accept a 1-bed only if it's "big with open kitchen/living"; every auto-MEDIUM 1-bed with `open-kitchen✓` and unverified size has been LOW-labeled by the user, so without confirming open-kitchen we can't justify HIGH for any 1-bed.
 4. **Not fully furnished**: `Furnished ∈ {Part, Unfurnished, Unknown}`. Listings explicitly marked `Furnished` cap at MEDIUM with `furnished` flag in Reason. `Unknown` is permissive — most agents skip the field; we don't penalise that. Rationale: the user's first applied flat (Pewter Court, N7, 2026-04-29) was fully furnished and on viewing turned out to be dirty plus had a second bed where the user's desk was meant to go; landlord refused to remove furniture. Furnished is a strong correlate of "no room for desk" and "more stuff than wanted" failure modes.
+
+   **Description-text fallback for Furnished resolution:** if the structured JSON `furnished` field is missing, `null`, `"Ask agent"`, or otherwise not one of the canonical values, scan the description body (case-insensitive) for these patterns IN ORDER and use the FIRST match to resolve Furnished:
+   - `\b(?:available\s+)?unfurnished\b` / `\blet\s+unfurnished\b` / `\bcomes\s+unfurnished\b` → `Furnished=Unfurnished`
+   - `\bpart[-\s]furnished\b` / `\bpartly\s+furnished\b` / `\bpartially\s+furnished\b` → `Furnished=Part`
+   - `\bfurnishing\s+(?:is\s+)?optional\b` / `\bfurnished\s+or\s+unfurnished\b` / `\bfurnished/unfurnished\b` → `Furnished=Part` (signal that landlord is flexible)
+   - `\bfully\s+furnished\b` / `\bavailable\s+furnished\b` → `Furnished=Furnished`
+   - No match → leave as `Unknown`. Append `furnished-resolved-from-text:<bucket>` to Reason for transparency. Rationale: the Pearl House listing (RM 87870696, Market Road N7, 2026-04-30) had structured field `"Ask agent"` but description said "available unfurnished" — the Furnished gate didn't fire because we only consulted structured data. This fallback closes that gap.
 
 Tiers (after gates):
 - **HIGH**: score ≥ [FLAT_TIER_HIGH_THRESHOLD] AND **zero** gates failed.

@@ -238,7 +238,7 @@ At the start of this section, probe Playwright by calling `mcp__playwright__brow
 Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slugs.
 
 - **Rightmove** (6 URLs covering the 8 primary areas via broader regions):
-  - Islington (covers Islington + Angel + Canonbury): `https://www.rightmove.co.uk/property-to-rent/find.html?locationIdentifier=REGION%5E93965&minBedrooms=[FLAT_BEDROOMS_MIN]&maxBedrooms=[FLAT_BEDROOMS_MAX]&maxPrice=[FLAT_BUDGET_HARD_CAP]&propertyTypes=flat&includeLetAgreed=false&sortType=6`
+  - Islington (covers Islington + Angel + Canonbury): `https://www.rightmove.co.uk/property-to-rent/find.html?locationIdentifier=REGION%5E93965&minBedrooms=[FLAT_BEDROOMS_MIN]&maxBedrooms=[FLAT_BEDROOMS_MAX]&maxPrice=[FLAT_BUDGET_HARD_CAP]&propertyTypes=flat,maisonette&includeLetAgreed=false&sortType=6`
   - Highbury: `locationIdentifier=REGION%5E70438`
   - Camden Town: `locationIdentifier=REGION%5E85262`
   - Kentish Town: `locationIdentifier=REGION%5E85230`
@@ -263,7 +263,7 @@ Rightmove uses numeric `REGION_CODE` identifiers; the others take text area slug
 Run after primary areas complete. Same URL patterns as above; only the area slug / location identifier changes. For Rightmove, REGION codes for secondary areas aren't pre-cached — build the URL with `searchLocation=<area+name>` (URL-encoded) instead of `locationIdentifier=REGION%5E<id>`. Rightmove will resolve the search and the listing extraction logic in step 7b is unchanged.
 
 - **Rightmove** (8 URLs, one per secondary area, using `searchLocation` text search):
-  `https://www.rightmove.co.uk/property-to-rent/find.html?searchLocation=[area+name]&minBedrooms=[FLAT_BEDROOMS_MIN]&maxBedrooms=[FLAT_BEDROOMS_MAX]&maxPrice=[FLAT_BUDGET_HARD_CAP]&propertyTypes=flat&includeLetAgreed=false&sortType=6`
+  `https://www.rightmove.co.uk/property-to-rent/find.html?searchLocation=[area+name]&minBedrooms=[FLAT_BEDROOMS_MIN]&maxBedrooms=[FLAT_BEDROOMS_MAX]&maxPrice=[FLAT_BUDGET_HARD_CAP]&propertyTypes=flat,maisonette&includeLetAgreed=false&sortType=6`
   Areas (URL-encoded): `Tufnell+Park`, `Holloway`, `Bloomsbury`, `Russell+Square`, `Barbican`, `Finsbury+Park`, `London+Bridge`, `Bermondsey`.
 
 - **Zoopla** (one URL per secondary area; same `/to-rent/flats/london/<slug>/?q=<Area>` pattern as primary):
